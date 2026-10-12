@@ -19,16 +19,51 @@ correct and record what was dropped in `DESIGN.md` → "What I left out and why"
 Chicago Data Portal — **Taxi Trips (2024-)**, dataset `ajtu-isnz`, Socrata (SODA) API.
 
 - Endpoint: `https://data.cityofchicago.org/resource/ajtu-isnz.json`
-- Paginate with `$limit`, `$offset` and `$order=trip_id`; filter by month with `$where`.
 - Column dictionary: `https://data.cityofchicago.org/api/views/ajtu-isnz/columns.json`.
   **Verify real column names and types against this dictionary before writing any schema.**
-  Do not assume names from memory.
+  Do not assume names from memory. Its `cachedContents.cardinality` stats are unreliable.
 - Optional app token in `SOCRATA_APP_TOKEN` (`.env`) to avoid throttling.
-- Known data quality: Taxi ID is anonymized but consistent, census tracts are suppressed in some
-  cases, timestamps are rounded to 15 minutes. Expect nulls, zero or negative miles/fares, and
-  duplicates. Every cleaning rule is documented in `DESIGN.md`.
-- Target volume: 2–5 million trips. If API ingestion is too slow, documented plan B: replicate
-  real months with shifted dates, clearly flagged as such.
+- **Window:** Jan–Jun 2025 by default (3,313,460 raw trips, two full quarters). Configurable via
+  `INGEST_START_MONTH` / `INGEST_END_MONTH` (env) or `--start` / `--end` (CLI), `YYYY-MM`,
+  inclusive, so the benchmark can be re-run at a larger volume.
+- **Pagination:** keyset, not `$offset`: `$where=<month range> AND trip_id > :cursor`,
+  `$order=trip_id`, `$limit=50000`, explicit `$select` of the columns we keep. Each page lands as
+  `data/raw/YYYY-MM/NNNN.ndjson.gz` (temp file + rename) with a per-month manifest (cursor range,
+  row count, sha256). A month is complete when its rows equal the API `count(*)`; re-runs skip
+  complete months and resume incomplete ones from the last cursor.
+- **Wire format:** null fields are omitted from the JSON object (not `null`); all numbers arrive as
+  strings; timestamps have no time zone (Chicago local time) and are rounded to 15 minutes.
+
+### Verified data facts (live API, Oct 2026)
+
+- `trip_id` (40-char hex) is unique across all 18.66M rows: no duplicates by key. Repeated
+  (taxi, start, end, total) tuples exist but are plausibly real trips; do not dedupe on content.
+- `taxi_id` is a 128-char hash with a literal `"NA"` sentinel (13 rows) → unknown taxi.
+  17% of taxis serve more than one company, so company is an attribute of the trip.
+- Amounts (`fare`, `tips`, `tolls`, `extras`, `trip_total`) have **no negatives** (min 0); they are
+  null together in 0.19% of rows. Zero miles (8.4%) and zero seconds (1.3%) are common.
+- **Revenue is `trip_total`.** It is not the sum of fare + tips + tolls + extras (38% of rows
+  differ: an unpublished surcharge). Never recompute it.
+- Census tracts are suppressed in ~55% of rows. Tract → community area and tract/area → centroid
+  are functional dependencies, so tracts and centroids are **not ingested** (no query needs them,
+  and they would break 3NF on `trips`).
+- Community areas are numbers 1–77 only. Names come from the committed seed
+  `sql/seed/community_areas.csv` (fetched once from Boundaries – Community Areas, `igwz-8jzy`,
+  fields `area_numbe`, `community`). The pipeline reads the CSV, never the API.
+- `company` has 46 raw values with spelling variants of the same entity (LLC/Inc/punctuation/
+  spacing). Canonicalize: lowercase, strip punctuation, collapse whitespace, drop a trailing
+  `llc`/`inc`.
+- Durations come from `trip_seconds`; end − start is rounded to 15 minutes.
+
+### Cleaning rules (approved)
+
+Rejected rows go to `staging.rejected_trips` with a reason; counts are reported. Every rule is
+also documented in `DESIGN.md`.
+
+- Reject: null amounts; `trip_end_timestamp < trip_start_timestamp`; `trip_total > 1000`;
+  `trip_seconds > 21600` (6 h).
+- Keep: zero miles, zero seconds.
+- Map `taxi_id = "NA"` to unknown taxi.
 
 ## The three benchmark configurations
 
@@ -47,15 +82,27 @@ separation is the core argument of the project; do not blur it.
 - **B (star):** `fact_trips` with surrogate keys to `dim_date`, `dim_time` (hour and 15-min slot),
   `dim_company`, `dim_payment`, `dim_area` (role-playing: pickup and dropoff), `dim_taxi`.
   Materialized views are pre-aggregation: they are measured as a separate row and never presented
-  as the same work as the query on the fact table.
-- **C:** the same star schema loaded into DuckDB.
+  as the same work as the query on the fact table. Missing area/taxi map to an `Unknown` member
+  (key 0). **Index parity:** btree indexes on the `fact_trips` foreign keys (at minimum
+  `date_key`), mirroring A's FK indexes.
+- **C:** the same star schema loaded into DuckDB via `ATTACH` of Postgres (`CREATE TABLE AS`), so
+  C holds exactly B's rows. Fallback if `ATTACH` fails: export the star tables to Parquet and load
+  those.
+- The star is built from the OLTP tables, so all three configs see the same cleaned rows.
+- `ANALYZE` after every load. `work_mem` and `max_parallel_workers_per_gather` are pinned in
+  `docker-compose.yml`, identical for A and B, and recorded in the benchmark metadata.
 
 ## Analytical queries (same questions across all three configs)
 
 1. Trips, total revenue and average fare per month.
-2. Top 10 pickup community areas by revenue, with their average ticket.
-3. Average tip by payment type and company, filtered to one quarter.
-4. Day-of-week × hour matrix: trip volume and average duration.
+2. Top 10 pickup community areas by revenue, with their average ticket, **excluding unknown
+   areas**. This is the question's semantics, written explicitly in every config, not a patch to
+   make results match.
+3. Average tip by payment type and company, filtered to one quarter (2025-Q2 for the default
+   window).
+4. Day-of-week × hour matrix: trip volume and average duration (`trip_seconds`).
+
+Revenue is always `trip_total`.
 
 ## Benchmark rules
 
@@ -72,7 +119,8 @@ separation is the core argument of the project; do not blur it.
 ## Expected structure
 
 ```
-sql/oltp/  sql/star/  sql/duckdb/  sql/queries/
+sql/oltp/  sql/star/  sql/duckdb/  sql/queries/  sql/seed/
+data/          (git-ignored: raw pages + manifests, olap.duckdb)
 src/ingest/  src/transform/  src/bench/
 tests/integration/
 ui/            (static HTML that reads results/benchmark.json)
