@@ -43,3 +43,43 @@ several rules is recorded under the first one, in this order.
 Kept on purpose: zero miles and zero seconds (common, not clearly wrong). Company spelling
 variants are merged by a canonical key (lowercase, no `.`/`,`, collapsed whitespace, no trailing
 `llc`/`inc`); in H1 2025 this merges 3 companies spelled 2 ways each.
+
+## Benchmark method
+
+`npm run bench` runs five rows over the same four questions:
+
+| Row | Engine | Model | Notes |
+|---|---|---|---|
+| A | Postgres 16 | OLTP 3NF (`oltp`) | FK + start-timestamp indexes |
+| B | Postgres 16 | Star (`star.fact_trips`) | btree on fact FKs (parity with A) |
+| B-MV | Postgres 16 | Materialized views over the star | pre-aggregation; build time reported separately |
+| C threads=3 | DuckDB | Star (same SQL files as B) | **primary C row**: matches Postgres's per-query budget (leader + 2 parallel workers) |
+| C threads=8 | DuckDB | Star | DuckDB default, reported as a separate row |
+
+A→B isolates the model (same engine), B→C the engine (same model, same SQL text), B→B-MV the
+effect of pre-aggregation. Postgres settings are pinned in `docker-compose.yml`
+(`work_mem=64MB`, `max_parallel_workers_per_gather=2`, `jit=off`, `shared_buffers=1GB`) and
+recorded in `results/benchmark.json`, together with versions, row counts, the host chip and RAM
+(`sysctl`) and the Docker VM's CPUs and memory.
+
+- **Verification first.** Each query runs once in every config and its result is compared with
+  config A (numbers within absolute tolerance 1e-6, text exactly; q3 is compared after sorting by
+  its text key because the engines collate text differently). Any mismatch aborts the run before
+  timing.
+- **Warm:** 1 untimed warm-up, then 10 timed runs on the same connection; median and nearest-rank
+  p95 (with 10 samples, p95 is the slowest run).
+- **Restart cold:** before every timed cold run the Postgres container is restarted (emptying
+  `shared_buffers` and backend caches) and a new connection opened; DuckDB gets a fresh read-only
+  instance (empty buffer pool). **This is not a true cold cache:** Docker runs inside the OrbStack
+  VM, whose OS page cache survives container restarts, so table files are likely still in VM
+  memory. Likewise DuckDB runs on the macOS host and `data/olap.duckdb` stays in the host page
+  cache. Cold numbers therefore measure an empty database buffer cache, not disk reads. Clearing
+  the VM page cache would require restarting the VM or dropping caches as root inside it, which
+  was out of scope.
+- **Timing scope:** wall clock around a single query call after the connection is open (send,
+  execute, receive a small result). Postgres timings include a loopback round trip into the VM;
+  DuckDB runs in-process. Both include parse and plan time.
+- **Plans** (`results/plans/`): `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)` and DuckDB
+  `EXPLAIN ANALYZE`, captured in a separate untimed pass after one untimed execution.
+- **Physical order:** `oltp.trips`, `star.fact_trips` and the DuckDB fact table are all loaded in
+  (start timestamp, trip_id) order, so no config gets a clustering advantage.

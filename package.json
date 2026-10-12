@@ -12,7 +12,8 @@
     "ingest:extract": "tsx src/ingest/extract.ts",
     "load": "tsx src/load.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench": "tsx src/bench/index.ts"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^12.2.0",
