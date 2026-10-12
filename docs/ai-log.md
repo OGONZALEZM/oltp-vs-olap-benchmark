@@ -53,3 +53,20 @@ Live log. One entry every time the AI generates something that had to be correct
 - **Fix:** CLAUDE.md data-source section rewritten to match the real data; decisions (window,
   cleaning rules, pagination, revenue definition, query 2 semantics, index parity) recorded there.
   Community area names seeded from `igwz-8jzy` into `sql/seed/community_areas.csv`.
+
+### 13:45 Load step: two SQL bugs caught by the Testcontainers integration test
+- **Prompt / context:** write step 3.2 (compose, staging/OLTP/star DDL, COPY loader, DuckDB copy).
+- **What the AI generated:** `sql/oltp/load.sql` and `src/transform/build-duckdb.ts`.
+- **What was wrong:**
+  1. `SELECT DISTINCT x ... ORDER BY x COLLATE "C"` (payment types, taxis) is invalid in Postgres:
+     the collated ORDER BY expression is not in the DISTINCT select list.
+  2. The DuckDB loader read column names from `information_schema.columns` filtered only by
+     table name. After `ATTACH`ing Postgres, the attached `star.*` tables appear there too, so
+     every column came back twice ("Duplicate column name in INSERT").
+  3. (Test bug, not code) the company-merge fixture had a 1-1-1 tie between spellings, so the
+     tie-break legitimately picked the double-space variant.
+- **How it was caught:** `tests/integration/load.test.ts` against a real Postgres 16 container,
+  before the first real load.
+- **Fix:** `GROUP BY` instead of `DISTINCT`; filter `information_schema` to
+  `table_catalog = current_database() AND table_schema = 'main'`; fixture makes the expected
+  spelling the majority while still covering the comma and double-space variants.

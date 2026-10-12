@@ -67,7 +67,7 @@ async function writeAtomic(path: string, data: string | Buffer): Promise<void> {
   await rename(tmp, path);
 }
 
-async function readManifest(path: string): Promise<MonthManifest | null> {
+export async function readManifest(path: string): Promise<MonthManifest | null> {
   try {
     return JSON.parse(await readFile(path, "utf8")) as MonthManifest;
   } catch (err) {

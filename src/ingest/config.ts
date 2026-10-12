@@ -37,9 +37,20 @@ export function monthRange(start: string, end: string): string[] {
   }
 }
 
-/** Precedence: CLI flag > environment variable (.env included) > default. */
-export function loadExtractConfig(argv: string[] = process.argv.slice(2)): ExtractConfig {
+export function loadDotEnv(): void {
   if (existsSync(".env")) process.loadEnvFile(".env");
+}
+
+/** Ingestion window. Precedence: CLI flag > environment variable (.env included) > default. */
+export function resolveMonths(startFlag?: string, endFlag?: string): string[] {
+  return monthRange(
+    startFlag ?? process.env.INGEST_START_MONTH ?? DEFAULT_START_MONTH,
+    endFlag ?? process.env.INGEST_END_MONTH ?? DEFAULT_END_MONTH,
+  );
+}
+
+export function loadExtractConfig(argv: string[] = process.argv.slice(2)): ExtractConfig {
+  loadDotEnv();
 
   const { values } = parseArgs({
     args: argv,
@@ -53,8 +64,6 @@ export function loadExtractConfig(argv: string[] = process.argv.slice(2)): Extra
     strict: true,
   });
 
-  const start = values.start ?? process.env.INGEST_START_MONTH ?? DEFAULT_START_MONTH;
-  const end = values.end ?? process.env.INGEST_END_MONTH ?? DEFAULT_END_MONTH;
   const pageSize = Number(values["page-size"] ?? 50_000);
   const concurrency = Number(values.concurrency ?? 3);
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50_000) {
@@ -65,7 +74,7 @@ export function loadExtractConfig(argv: string[] = process.argv.slice(2)): Extra
   }
 
   return {
-    months: monthRange(start, end),
+    months: resolveMonths(values.start, values.end),
     dataDir: values["data-dir"] ?? "data/raw",
     pageSize,
     concurrency,

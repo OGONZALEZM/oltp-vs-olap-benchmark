@@ -7,14 +7,26 @@
     "node": ">=20.12"
   },
   "scripts": {
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
     "ingest:extract": "tsx src/ingest/extract.ts",
+    "load": "tsx src/load.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^12.2.0",
     "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@types/pg-copy-streams": "^1.2.5",
+    "testcontainers": "^12.2.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.4"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "^1.5.6-r.1",
+    "pg": "^8.23.1",
+    "pg-copy-streams": "^7.0.0"
   }
 }
