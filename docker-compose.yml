@@ -23,6 +23,9 @@ services:
       - work_mem=64MB
       - -c
       - max_parallel_workers_per_gather=2
+      # JIT compile time is noisy on short aggregate queries; off for A and B alike.
+      - -c
+      - jit=off
       # Pinned for reproducibility of load and cache behaviour:
       - -c
       - shared_buffers=1GB
