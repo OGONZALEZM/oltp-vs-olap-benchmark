@@ -35,6 +35,68 @@ sensitivity row, plans and metadata) are in `results/benchmark.json`.
 Design decisions and the reasoning behind these numbers: [DESIGN.md](DESIGN.md). Measurement
 method, noise, caveats and per-query plans: [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
+## What the data looked like, and what we decided
+
+Before any schema was written, the live API was profiled using the column dictionary plus aggregate
+queries. Several assumptions in the initial project context turned out to be wrong, and the
+design follows the real data instead. Each figure below names its scope:
+- **full dataset:** all 18,658,792 trips from Jan 2024 to the start of Oct 2026, as of profiling
+  in Oct 2026;
+- **Jan 2025:** one sampled month;
+- **H1 2025:** the benchmark window.
+
+Full data notes and the cleaning table: [docs/BENCHMARK.md](docs/BENCHMARK.md).
+
+### Data findings
+
+| Finding | What it meant for the design |
+|---|---|
+| `trip_id` is unique across all rows (full dataset). Repeated (taxi, start, end, total) tuples exist, but at 15-minute rounding they are plausibly real trips. | `trip_id` is the key (primary key in A, degenerate dimension in B). There is no content-based dedupe. Ingestion is idempotent through per-month manifests and keyset pagination. |
+| No negative amounts (full dataset). The real issues are zeros, outliers and impossible trips: 8.4% zero miles and 1.3% zero seconds; fares up to 9,999.75 and trips up to 24 hours; 107 trips that end before they start. | Reject outliers and impossible trips. Keep zeros, which are common and not clearly wrong. |
+| `trip_total` is not the sum of its components in 38% of rows (Jan 2025). | Revenue is always `trip_total`, never recomputed. |
+| Census tracts are suppressed in about 55% of rows (full dataset). | Tracts and centroids are left out of every model; no query needs them. |
+| Community areas arrive as numbers 1–77, with no names. | Names seeded once from the city's Boundaries dataset (`igwz-8jzy`) and committed as a CSV, so the pipeline depends on one API, not two. |
+| The same company appears under several spellings: 46 raw values (full dataset). | A canonical key (lowercase, no punctuation, collapsed whitespace, no trailing `llc`/`inc`) merges them. In H1 2025 that merges 3 companies spelled 2 ways each. |
+| 17% of taxis drove for more than one company (H1 2025: 523 of 3,075). | `company` belongs to the trip, not to the taxi. |
+| Timestamps carry no time zone and are rounded to 15 minutes. | Duration comes from `trip_seconds`, not from end minus start. The time dimension has 96 fifteen-minute slots. |
+| Some taxi IDs are the literal string `"NA"` (13 rows in the full dataset, 1 in H1 2025). | Mapped to no taxi: NULL in A, an Unknown row (key 0) in the star schema. |
+
+### Cleaning result (Jan–Jun 2025)
+
+3,313,460 rows landed. 8,579 (0.26%) were rejected with a recorded reason, leaving 3,304,881 trips
+in every configuration. A row failing several rules is counted under the first rule that rejects
+it (rule order: null amounts, ends before start, total over $1,000, over 6 hours).
+
+| Reason | Rows |
+|---|---:|
+| Null amounts | 6,249 |
+| Trip over 6 hours | 1,944 |
+| Trip total over $1,000 | 383 |
+| Ends before it starts | 3 |
+
+### Key decisions
+
+- **Real data over a toy API.** PokéAPI was considered and dropped: it is a catalog with no time
+  dimension and no transactions, so the fact table would have been entirely synthetic.
+- **Jan–Jun 2025 as the window.** Two complete quarters (q3 filters one of them), and enough volume
+  (3.3M rows) to make differences measurable without a synthetic generator. The window is
+  configurable for larger runs.
+- **Three configurations, not two.** Comparing a normalized Postgres against DuckDB would mix two
+  variables. A→B isolates the model and B→C the engine.
+- **A fair OLTP side.** Config A has indexes on every foreign key plus `trip_start_timestamp`.
+  Config B has a btree on every fact FK except `time_key` (6 indexes, as A has 6). Neither has
+  indexes added for a specific query.
+- **Same answers before any timing.** The benchmark refuses to time anything until every query
+  returns the same result in every configuration (numbers within 1e-6, text exactly).
+- **Pre-aggregation reported apart.** Materialized views do different work, so they get their own
+  row instead of being presented as a faster version of the same query.
+- **Methodology changes need a demonstrated cause.** Each change to the measurement followed a
+  cause shown independently of the results: pre-warming, the thermal pauses, and where the pauses
+  go. The headline statistic was fixed before the final run.
+
+Modeling choices in full: [DESIGN.md](DESIGN.md). How the AI was used and where it was corrected:
+[AI_WORKFLOW.md](AI_WORKFLOW.md).
+
 ## Prerequisites
 
 - **Node.js ≥ 20.12** (uses `process.loadEnvFile`) and npm.
