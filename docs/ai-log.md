@@ -195,3 +195,35 @@ The stack decision predates the repository and uses the first commit's time.
   contains a JIT section; B-jit is 0.9–1.2x of B, within noise (commits 8c320e1, 2693772).
 - **Lesson:** a sensitivity row has to prove its setting actually took effect. Record evidence
   from the plan, not just the `SET`.
+
+### 07:07 Review #3: warm Postgres timings were thermal noise, not cache
+- **Prompt / context:** third `benchmark-reviewer` run on HEAD 53abfc1 with a neutral prompt that
+  did not list what had changed. Raw output: `docs/reviews/review-3-benchmark-reviewer.md`.
+- **What the AI generated:** the measurement loop (configs one after another, timed runs back to
+  back) and the headline built only on warm medians, presented as Postgres's best case.
+- **What was wrong:**
+  - **#1 (important)** In the 8c320e1 run, Postgres warm medians were *higher* than restart
+    (empty buffer pool) medians in 6 of 8 A/B cells. Restart samples were tight; warm samples
+    drifted (q2 B warm 340–558 ms, restart 345–379 ms). The host is a fanless MacBook Air: warm
+    runs keep 3 cores busy for about 18 s per config, while restart runs get idle time between
+    them. So the warm series measured run order and heat, not the cache. Quoted on restart
+    medians, B→C at 3 threads fell from 12–22x to 9.4–18x, which also undercut DESIGN's
+    "VM overhead cannot account for a 10x gap". "q3: A wins (0.9x)" was 0.99x on restart.
+  - **#2 (minor)** "DuckDB medians within 9% of their minimums" held only for C-3t; C-8t reached
+    +28%.
+  - **#3 (minor)** The JIT sensitivity row covers B only, but at default thresholds JIT would
+    engage on A (q1 and q4 costs about 109k and 106k).
+  - **#4 (minor)** The committed `benchmark.json` carried the old JIT wording (fixed by the next
+    run).
+- **How it was caught:** the independent reviewer compared the two series sample by sample in
+  `results/benchmark.json`, and noted the host model (Mac15,13) from the metadata. Earlier reviews
+  had checked that warm runs were cache hits (they were), not that the warm series was stable.
+- **Fix (b7a2c1b):**
+  - Add a 2 s idle pause (`--cooldown-ms`) before every timed run, and run configs round-robin
+    per query.
+  - Decide the headline before re-running: warm median with restart median and warm min beside it.
+  - Drop threshold claims and report ranges only; q3 is now "roughly even"; per-config spread;
+    JIT coverage of A stated; thermal note in DESIGN.
+  - Final clean run follows.
+- **Lesson:** a "best case" label needs evidence from the data. Here the supposedly worse series
+  (restart) was the faster and tighter one.
