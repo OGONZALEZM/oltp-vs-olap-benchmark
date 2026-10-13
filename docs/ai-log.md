@@ -175,3 +175,23 @@ The stack decision predates the repository and uses the first commit's time.
   - List DuckDB inside the same VM, round-robin ordering and more runs in DESIGN.md's "What I
     left out and why".
   - Re-run the benchmark from a clean commit.
+
+### 06:44 B-jit row: JIT forced with jit_above_cost=0 instead of the literal jit=on
+- **Prompt / context:** Oscar asked for "a B row with jit=on, warm only" as the sensitivity check
+  for review #2 finding 1.
+- **What the AI did:** implemented it literally first (`SET jit = on`), then checked the smoke
+  run's plans for a `JIT:` section before trusting the row.
+- **What was wrong with the literal instruction:** no B plan used JIT. B's plan costs (83k–89k) are
+  below Postgres's default `jit_above_cost` of 100,000, so `jit=on` alone never engages JIT on
+  B, and the row would have re-measured B with JIT off while being labelled "jit=on". It would
+  have "shown" that JIT doesn't matter without ever running JIT.
+- **How it was caught:** the bench records `jitUsed` per query from the captured plan; the smoke
+  run reported "JIT in plan: no" for all four queries. A manual `EXPLAIN` with
+  `jit_above_cost = 0` confirmed JIT was available and engaged once the threshold was removed.
+- **Fix / decision:** deviated from the instruction, and said so before committing: B-jit uses
+  `SET jit = on, jit_above_cost = 0` (inlining and optimization keep their default thresholds),
+  as review #2 suggested ("JIT forced on"). DESIGN.md records that at default thresholds JIT
+  doesn't engage on B at all. Oscar confirmed the deviation was correct. Result: every B-jit plan
+  contains a JIT section; B-jit is 0.9–1.2x of B, within noise (commits 8c320e1, 2693772).
+- **Lesson:** a sensitivity row has to prove its setting actually took effect. Record evidence
+  from the plan, not just the `SET`.
