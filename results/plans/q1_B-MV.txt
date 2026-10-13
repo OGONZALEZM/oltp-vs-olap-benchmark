@@ -1,0 +1,19 @@
+-- B-MV Postgres materialized views
+-- Trips, revenue and average fare per month
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q1 from the pre-aggregated materialized view (B-MV, reported separately from B).
+SELECT year, month, trips, revenue, sum_fare / trips AS avg_fare
+FROM mv_monthly
+ORDER BY year, month;
+
+
+Sort  (cost=1.17..1.18 rows=6 width=53) (actual rows=6 loops=1)
+  Sort Key: year, month
+  Sort Method: quicksort  Memory: 25kB
+  Buffers: shared hit=1
+  ->  Seq Scan on mv_monthly  (cost=0.00..1.09 rows=6 width=53) (actual rows=6 loops=1)
+        Buffers: shared hit=1
+Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
+Planning Time: 0.012 ms
+Execution Time: 0.012 ms

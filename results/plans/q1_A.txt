@@ -1,0 +1,39 @@
+-- A  Postgres OLTP (3NF)
+-- Trips, revenue and average fare per month
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q1: trips, total revenue (trip_total) and average fare per month.
+SELECT extract(year FROM trip_start_timestamp)::int  AS year,
+       extract(month FROM trip_start_timestamp)::int AS month,
+       count(*)                                      AS trips,
+       sum(trip_total)                               AS revenue,
+       avg(fare)                                     AS avg_fare
+FROM trips
+GROUP BY 1, 2
+ORDER BY 1, 2;
+
+
+Finalize GroupAggregate  (cost=105610.82..109295.59 rows=12561 width=80) (actual rows=6 loops=1)
+  Group Key: ((EXTRACT(year FROM trip_start_timestamp))::integer), ((EXTRACT(month FROM trip_start_timestamp))::integer)
+  Buffers: shared hit=58701
+  ->  Gather Merge  (cost=105610.82..108541.93 rows=25122 width=80) (actual rows=18 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=58701
+        ->  Sort  (cost=104610.80..104642.20 rows=12561 width=80) (actual rows=6 loops=3)
+              Sort Key: ((EXTRACT(year FROM trip_start_timestamp))::integer), ((EXTRACT(month FROM trip_start_timestamp))::integer)
+              Sort Method: quicksort  Memory: 26kB
+              Buffers: shared hit=58701
+              Worker 0:  Sort Method: quicksort  Memory: 26kB
+              Worker 1:  Sort Method: quicksort  Memory: 26kB
+              ->  Partial HashAggregate  (cost=103441.58..103755.60 rows=12561 width=80) (actual rows=6 loops=3)
+                    Group Key: (EXTRACT(year FROM trip_start_timestamp))::integer, (EXTRACT(month FROM trip_start_timestamp))::integer
+                    Batches: 1  Memory Usage: 409kB
+                    Buffers: shared hit=58687
+                    Worker 0:  Batches: 1  Memory Usage: 409kB
+                    Worker 1:  Batches: 1  Memory Usage: 409kB
+                    ->  Parallel Seq Scan on trips  (cost=0.00..86228.28 rows=1377064 width=20) (actual rows=1101627 loops=3)
+                          Buffers: shared hit=58687
+Settings: work_mem = '64MB', jit = 'off', search_path = 'oltp'
+Planning Time: 0.091 ms
+Execution Time: 628.465 ms

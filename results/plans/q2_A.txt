@@ -1,0 +1,60 @@
+-- A  Postgres OLTP (3NF)
+-- Top 10 pickup areas by revenue (known areas)
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q2: top 10 pickup community areas by revenue, with average ticket, excluding unknown areas.
+SELECT ca.community_area_id,
+       ca.name               AS area_name,
+       count(*)              AS trips,
+       sum(t.trip_total)     AS revenue,
+       avg(t.trip_total)     AS avg_ticket
+FROM trips t
+JOIN community_areas ca ON ca.community_area_id = t.pickup_community_area_id
+WHERE t.pickup_community_area_id IS NOT NULL      -- exclude unknown areas
+GROUP BY ca.community_area_id, ca.name
+ORDER BY revenue DESC, ca.community_area_id
+LIMIT 10;
+
+
+Limit  (cost=87235.51..87235.54 rows=10 width=86) (actual rows=10 loops=1)
+  Buffers: shared hit=58710
+  ->  Sort  (cost=87235.51..87235.70 rows=77 width=86) (actual rows=10 loops=1)
+        Sort Key: (sum(t.trip_total)) DESC, ca.community_area_id
+        Sort Method: top-N heapsort  Memory: 26kB
+        Buffers: shared hit=58710
+        ->  Finalize GroupAggregate  (cost=87213.18..87233.85 rows=77 width=86) (actual rows=77 loops=1)
+              Group Key: ca.community_area_id
+              Buffers: shared hit=58710
+              ->  Gather Merge  (cost=87213.18..87231.15 rows=154 width=86) (actual rows=231 loops=1)
+                    Workers Planned: 2
+                    Workers Launched: 2
+                    Buffers: shared hit=58710
+                    ->  Sort  (cost=86213.16..86213.35 rows=77 width=86) (actual rows=77 loops=3)
+                          Sort Key: ca.community_area_id
+                          Sort Method: quicksort  Memory: 38kB
+                          Buffers: shared hit=58710
+                          Worker 0:  Sort Method: quicksort  Memory: 38kB
+                          Worker 1:  Sort Method: quicksort  Memory: 38kB
+                          ->  Partial HashAggregate  (cost=86209.79..86210.75 rows=77 width=86) (actual rows=77 loops=3)
+                                Group Key: ca.community_area_id
+                                Batches: 1  Memory Usage: 48kB
+                                Buffers: shared hit=58696
+                                Worker 0:  Batches: 1  Memory Usage: 48kB
+                                Worker 1:  Batches: 1  Memory Usage: 48kB
+                                ->  Hash Join  (cost=2.73..76164.45 rows=1339378 width=20) (actual rows=1070943 loops=3)
+                                      Hash Cond: (t.pickup_community_area_id = ca.community_area_id)
+                                      Buffers: shared hit=58696
+                                      ->  Parallel Seq Scan on trips t  (cost=0.00..72457.64 rows=1339378 width=8) (actual rows=1070943 loops=3)
+                                            Filter: (pickup_community_area_id IS NOT NULL)
+                                            Rows Removed by Filter: 30684
+                                            Buffers: shared hit=58687
+                                      ->  Hash  (cost=1.77..1.77 rows=77 width=14) (actual rows=77 loops=3)
+                                            Buckets: 1024  Batches: 1  Memory Usage: 12kB
+                                            Buffers: shared hit=3
+                                            ->  Seq Scan on community_areas ca  (cost=0.00..1.77 rows=77 width=14) (actual rows=77 loops=3)
+                                                  Buffers: shared hit=3
+Settings: work_mem = '64MB', jit = 'off', search_path = 'oltp'
+Planning:
+  Buffers: shared hit=7
+Planning Time: 0.275 ms
+Execution Time: 364.731 ms

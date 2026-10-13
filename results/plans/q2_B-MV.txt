@@ -1,0 +1,25 @@
+-- B-MV Postgres materialized views
+-- Top 10 pickup areas by revenue (known areas)
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q2 from the pre-aggregated materialized view (B-MV), excluding unknown areas.
+SELECT community_area_id, area_name, trips, revenue, revenue / trips AS avg_ticket
+FROM mv_pickup_area
+WHERE pickup_area_key <> 0                        -- exclude unknown areas
+ORDER BY revenue DESC, community_area_id
+LIMIT 10;
+
+
+Limit  (cost=4.02..4.05 rows=10 width=62) (actual rows=10 loops=1)
+  Buffers: shared hit=1
+  ->  Sort  (cost=4.02..4.22 rows=77 width=62) (actual rows=10 loops=1)
+        Sort Key: revenue DESC, community_area_id
+        Sort Method: top-N heapsort  Memory: 26kB
+        Buffers: shared hit=1
+        ->  Seq Scan on mv_pickup_area  (cost=0.00..2.36 rows=77 width=62) (actual rows=77 loops=1)
+              Filter: (pickup_area_key <> 0)
+              Rows Removed by Filter: 1
+              Buffers: shared hit=1
+Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
+Planning Time: 0.013 ms
+Execution Time: 0.041 ms

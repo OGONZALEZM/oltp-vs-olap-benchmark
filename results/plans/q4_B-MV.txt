@@ -1,0 +1,19 @@
+-- B-MV Postgres materialized views
+-- Day-of-week x hour: trips and average duration
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q4 from the pre-aggregated materialized view (B-MV).
+SELECT iso_dow, hour, trips, sum_seconds / n_seconds AS avg_seconds
+FROM mv_dow_hour
+ORDER BY iso_dow, hour;
+
+
+Sort  (cost=10.73..11.15 rows=168 width=44) (actual rows=168 loops=1)
+  Sort Key: iso_dow, hour
+  Sort Method: quicksort  Memory: 34kB
+  Buffers: shared hit=2
+  ->  Seq Scan on mv_dow_hour  (cost=0.00..4.52 rows=168 width=44) (actual rows=168 loops=1)
+        Buffers: shared hit=2
+Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
+Planning Time: 0.008 ms
+Execution Time: 0.055 ms

@@ -1,0 +1,22 @@
+-- B-MV Postgres materialized views
+-- Average tip by payment type and company, one quarter
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q3 from the pre-aggregated materialized view (B-MV), for one quarter.
+SELECT payment_type, company, trips, sum_tips / trips AS avg_tip
+FROM mv_quarter_payment_company
+WHERE year = 2025 AND quarter = 2
+ORDER BY 1, 2;
+
+
+Sort  (cost=12.61..12.95 rows=137 width=68) (actual rows=137 loops=1)
+  Sort Key: payment_type, company
+  Sort Method: quicksort  Memory: 35kB
+  Buffers: shared hit=3
+  ->  Seq Scan on mv_quarter_payment_company  (cost=0.00..7.75 rows=137 width=68) (actual rows=137 loops=1)
+        Filter: ((year = 2025) AND (quarter = 2))
+        Rows Removed by Filter: 134
+        Buffers: shared hit=3
+Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
+Planning Time: 0.015 ms
+Execution Time: 0.074 ms

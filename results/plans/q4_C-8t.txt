@@ -1,0 +1,189 @@
+-- C  DuckDB star, threads=8 (default)
+-- Day-of-week x hour: trips and average duration
+-- DuckDB EXPLAIN ANALYZE: operator timings include profiling overhead; not benchmark results.
+-- Q4: day-of-week x hour matrix: trip volume and average duration (trip_seconds).
+SELECT d.iso_dow, t.hour,
+       count(*)            AS trips,
+       avg(f.trip_seconds) AS avg_seconds
+FROM fact_trips f
+JOIN dim_date d ON d.date_key = f.date_key
+JOIN dim_time t ON t.time_key = f.time_key
+GROUP BY d.iso_dow, t.hour
+ORDER BY d.iso_dow, t.hour;
+
+
+┌─────────────────────────────────────┐
+│┌───────────────────────────────────┐│
+││    Query Profiling Information    ││
+│└───────────────────────────────────┘│
+└─────────────────────────────────────┘
+EXPLAIN ANALYZE -- Q4: day-of-week x hour matrix: trip volume and average duration (trip_seconds). SELECT d.iso_dow, t.hour,        count(*)            AS trips,        avg(f.trip_seconds) AS avg_seconds FROM fact_trips f JOIN dim_date d ON d.date_key = f.date_key JOIN dim_time t ON t.time_key = f.time_key GROUP BY d.iso_dow, t.hour ORDER BY d.iso_dow, t.hour; 
+┌────────────────────────────────────────────────┐
+│┌──────────────────────────────────────────────┐│
+││              Total Time: 0.0107s             ││
+│└──────────────────────────────────────────────┘│
+└────────────────────────────────────────────────┘
+┌───────────────────────────┐
+│           QUERY           │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│      EXPLAIN_ANALYZE      │
+│    ────────────────────   │
+│                           │
+│           0 rows          │
+│           0.00s           │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│__internal_decompress_integ│
+│    ral_smallint(#0, 1)    │
+│__internal_decompress_integ│
+│    ral_smallint(#1, 0)    │
+│             #2            │
+│             #3            │
+│                           │
+│                           │
+│                           │
+│          168 rows         │
+│           0.00s           │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│          ORDER_BY         │
+│    ────────────────────   │
+│       d.iso_dow ASC       │
+│        t."hour" ASC       │
+│                           │
+│                           │
+│                           │
+│          168 rows         │
+│           0.00s           │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│__internal_compress_integra│
+│     l_utinyint(#0, 1)     │
+│__internal_compress_integra│
+│     l_utinyint(#1, 0)     │
+│             #2            │
+│             #3            │
+│                           │
+│                           │
+│                           │
+│          168 rows         │
+│           0.00s           │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│__internal_decompress_integ│
+│    ral_smallint(#0, 1)    │
+│__internal_decompress_integ│
+│    ral_smallint(#1, 0)    │
+│             #2            │
+│             #3            │
+│                           │
+│                           │
+│                           │
+│          168 rows         │
+│           0.00s           │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│   PERFECT_HASH_GROUP_BY   │
+│    ────────────────────   │
+│          Groups:          │
+│             #0            │
+│             #1            │
+│                           │
+│        Aggregates:        │
+│        count_star()       │
+│          avg(#2)          │
+│                           │
+│                           │
+│                           │
+│          168 rows         │
+│           0.03s           │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│          iso_dow          │
+│            hour           │
+│        trip_seconds       │
+│                           │
+│                           │
+│                           │
+│       3,304,881 rows      │
+│           0.00s           │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│             #0            │
+│__internal_compress_integra│
+│     l_utinyint(#1, 1)     │
+│__internal_compress_integra│
+│     l_utinyint(#2, 0)     │
+│                           │
+│                           │
+│                           │
+│       3,304,881 rows      │
+│           0.01s           │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│         HASH_JOIN         │
+│    ────────────────────   │
+│      Join Type: INNER     │
+│                           │
+│        Conditions:        │
+│    time_key = time_key    ├───────────────────────────────────────────┐
+│                           │                                           │
+│                           │                                           │
+│                           │                                           │
+│       3,304,881 rows      │                                           │
+│           0.01s           │                                           │
+└─────────────┬─────────────┘                                           │
+┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
+│         HASH_JOIN         │                             │         TABLE_SCAN        │
+│    ────────────────────   │                             │    ────────────────────   │
+│      Join Type: INNER     │                             │           Table:          │
+│                           │                             │     olap.main.dim_time    │
+│        Conditions:        │                             │                           │
+│    date_key = date_key    │                             │   Type: Sequential Scan   │
+│                           │                             │                           │
+│                           ├──────────────┐              │        Projections:       │
+│                           │              │              │          time_key         │
+│                           │              │              │            hour           │
+│           0.01s           │              │              │                           │
+│                           │              │              │                           │
+│                           │              │              │                           │
+│       3,304,881 rows      │              │              │          96 rows          │
+│          (0.01s)          │              │              │           0.00s           │
+└─────────────┬─────────────┘              │              └───────────────────────────┘
+┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+│         TABLE_SCAN        ││         TABLE_SCAN        │
+│    ────────────────────   ││    ────────────────────   │
+│           Table:          ││           Table:          │
+│    olap.main.fact_trips   ││     olap.main.dim_date    │
+│                           ││                           │
+│   Type: Sequential Scan   ││   Type: Sequential Scan   │
+│                           ││                           │
+│        Projections:       ││        Projections:       │
+│          date_key         ││          date_key         │
+│          time_key         ││          iso_dow          │
+│        trip_seconds       ││                           │
+│                           ││                           │
+│      Dynamic Filters:     ││                           │
+│    optional: date_key>    ││                           │
+│  =20250101 AND optional:  ││           0.00s           │
+│     date_key<=20250630    ││                           │
+│ optional: time_key>=0 AND ││                           │
+│   optional: time_key<=95  ││                           │
+│                           ││                           │
+│                           ││                           │
+│                           ││                           │
+│       3,304,881 rows      ││          181 rows         │
+│           0.01s           ││          (0.00s)          │
+└───────────────────────────┘└───────────────────────────┘
+

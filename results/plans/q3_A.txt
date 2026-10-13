@@ -1,0 +1,61 @@
+-- A  Postgres OLTP (3NF)
+-- Average tip by payment type and company, one quarter
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q3: average tip by payment type and company, for one quarter.
+SELECT p.name      AS payment_type,
+       c.name      AS company,
+       count(*)    AS trips,
+       avg(t.tips) AS avg_tip
+FROM trips t
+JOIN payment_types p ON p.payment_type_id = t.payment_type_id
+JOIN companies c     ON c.company_id = t.company_id
+WHERE t.trip_start_timestamp >= TIMESTAMP '2025-04-01 00:00:00'
+  AND t.trip_start_timestamp <  TIMESTAMP '2025-07-01 00:00:00'
+GROUP BY p.name, c.name
+ORDER BY 1, 2;
+
+
+Finalize GroupAggregate  (cost=81355.21..81423.46 rows=252 width=69) (actual rows=137 loops=1)
+  Group Key: p.name, c.name
+  Buffers: shared hit=37423
+  ->  Gather Merge  (cost=81355.21..81414.01 rows=504 width=69) (actual rows=398 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=37423
+        ->  Sort  (cost=80355.18..80355.81 rows=252 width=69) (actual rows=133 loops=3)
+              Sort Key: p.name, c.name
+              Sort Method: quicksort  Memory: 42kB
+              Buffers: shared hit=37423
+              Worker 0:  Sort Method: quicksort  Memory: 42kB
+              Worker 1:  Sort Method: quicksort  Memory: 42kB
+              ->  Partial HashAggregate  (cost=80341.98..80345.13 rows=252 width=69) (actual rows=133 loops=3)
+                    Group Key: p.name, c.name
+                    Batches: 1  Memory Usage: 93kB
+                    Buffers: shared hit=37407
+                    Worker 0:  Batches: 1  Memory Usage: 93kB
+                    Worker 1:  Batches: 1  Memory Usage: 93kB
+                    ->  Hash Join  (cost=3.40..72477.53 rows=786445 width=33) (actual rows=623752 loops=3)
+                          Hash Cond: (t.company_id = c.company_id)
+                          Buffers: shared hit=37407
+                          ->  Hash Join  (cost=1.59..70168.27 rows=786445 width=14) (actual rows=623752 loops=3)
+                                Hash Cond: (t.payment_type_id = p.payment_type_id)
+                                Buffers: shared hit=37376
+                                ->  Parallel Index Scan using trips_start_ts_idx on trips t  (cost=0.43..66852.81 rows=786445 width=8) (actual rows=623752 loops=3)
+                                      Index Cond: ((trip_start_timestamp >= '2025-04-01 00:00:00'::timestamp without time zone) AND (trip_start_timestamp < '2025-07-01 00:00:00'::timestamp without time zone))
+                                      Buffers: shared hit=37373
+                                ->  Hash  (cost=1.07..1.07 rows=7 width=10) (actual rows=7 loops=3)
+                                      Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                                      Buffers: shared hit=3
+                                      ->  Seq Scan on payment_types p  (cost=0.00..1.07 rows=7 width=10) (actual rows=7 loops=3)
+                                            Buffers: shared hit=3
+                          ->  Hash  (cost=1.36..1.36 rows=36 width=23) (actual rows=36 loops=3)
+                                Buckets: 1024  Batches: 1  Memory Usage: 10kB
+                                Buffers: shared hit=3
+                                ->  Seq Scan on companies c  (cost=0.00..1.36 rows=36 width=23) (actual rows=36 loops=3)
+                                      Buffers: shared hit=3
+Settings: work_mem = '64MB', jit = 'off', search_path = 'oltp'
+Planning:
+  Buffers: shared hit=12
+Planning Time: 0.238 ms
+Execution Time: 322.442 ms

@@ -1,0 +1,70 @@
+-- B  Postgres star (fact table)
+-- Average tip by payment type and company, one quarter
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q3: average tip by payment type and company, for one quarter.
+SELECT p.payment_type,
+       c.company_name AS company,
+       count(*)       AS trips,
+       avg(f.tips)    AS avg_tip
+FROM fact_trips f
+JOIN dim_date d    ON d.date_key = f.date_key
+JOIN dim_payment p ON p.payment_key = f.payment_key
+JOIN dim_company c ON c.company_key = f.company_key
+WHERE d.year = 2025 AND d.quarter = 2
+GROUP BY p.payment_type, c.company_name
+ORDER BY 1, 2;
+
+
+Finalize GroupAggregate  (cost=83473.16..83541.42 rows=252 width=69) (actual rows=137 loops=1)
+  Group Key: p.payment_type, c.company_name
+  Buffers: shared hit=53194
+  ->  Gather Merge  (cost=83473.16..83531.97 rows=504 width=69) (actual rows=396 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=53194
+        ->  Sort  (cost=82473.14..82473.77 rows=252 width=69) (actual rows=132 loops=3)
+              Sort Key: p.payment_type, c.company_name
+              Sort Method: quicksort  Memory: 41kB
+              Buffers: shared hit=53194
+              Worker 0:  Sort Method: quicksort  Memory: 42kB
+              Worker 1:  Sort Method: quicksort  Memory: 42kB
+              ->  Partial HashAggregate  (cost=82459.94..82463.09 rows=252 width=69) (actual rows=132 loops=3)
+                    Group Key: p.payment_type, c.company_name
+                    Batches: 1  Memory Usage: 93kB
+                    Buffers: shared hit=53178
+                    Worker 0:  Batches: 1  Memory Usage: 93kB
+                    Worker 1:  Batches: 1  Memory Usage: 93kB
+                    ->  Hash Join  (cost=8.82..75536.90 rows=692304 width=33) (actual rows=623752 loops=3)
+                          Hash Cond: (f.company_key = c.company_key)
+                          Buffers: shared hit=53178
+                          ->  Hash Join  (cost=7.01..73503.85 rows=692304 width=14) (actual rows=623752 loops=3)
+                                Hash Cond: (f.payment_key = p.payment_key)
+                                Buffers: shared hit=53147
+                                ->  Hash Join  (cost=5.85..70585.12 rows=692304 width=8) (actual rows=623752 loops=3)
+                                      Hash Cond: (f.date_key = d.date_key)
+                                      Buffers: shared hit=53144
+                                      ->  Parallel Seq Scan on fact_trips f  (cost=0.00..66880.00 rows=1377000 width=12) (actual rows=1101627 loops=3)
+                                            Buffers: shared hit=53110
+                                      ->  Hash  (cost=4.71..4.71 rows=91 width=4) (actual rows=91 loops=3)
+                                            Buckets: 1024  Batches: 1  Memory Usage: 12kB
+                                            Buffers: shared hit=6
+                                            ->  Seq Scan on dim_date d  (cost=0.00..4.71 rows=91 width=4) (actual rows=91 loops=3)
+                                                  Filter: ((year = 2025) AND (quarter = 2))
+                                                  Rows Removed by Filter: 90
+                                                  Buffers: shared hit=6
+                                ->  Hash  (cost=1.07..1.07 rows=7 width=10) (actual rows=7 loops=3)
+                                      Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                                      Buffers: shared hit=3
+                                      ->  Seq Scan on dim_payment p  (cost=0.00..1.07 rows=7 width=10) (actual rows=7 loops=3)
+                                            Buffers: shared hit=3
+                          ->  Hash  (cost=1.36..1.36 rows=36 width=23) (actual rows=36 loops=3)
+                                Buckets: 1024  Batches: 1  Memory Usage: 10kB
+                                Buffers: shared hit=3
+                                ->  Seq Scan on dim_company c  (cost=0.00..1.36 rows=36 width=23) (actual rows=36 loops=3)
+                                      Buffers: shared hit=3
+Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
+Planning:
+  Buffers: shared hit=20
+Planning Time: 0.328 ms
+Execution Time: 422.742 ms

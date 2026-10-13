@@ -1,0 +1,57 @@
+-- B  Postgres star (fact table)
+-- Day-of-week x hour: trips and average duration
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q4: day-of-week x hour matrix: trip volume and average duration (trip_seconds).
+SELECT d.iso_dow, t.hour,
+       count(*)            AS trips,
+       avg(f.trip_seconds) AS avg_seconds
+FROM fact_trips f
+JOIN dim_date d ON d.date_key = f.date_key
+JOIN dim_time t ON t.time_key = f.time_key
+GROUP BY d.iso_dow, t.hour
+ORDER BY d.iso_dow, t.hour;
+
+
+Finalize GroupAggregate  (cost=89140.61..89185.27 rows=168 width=44) (actual rows=168 loops=1)
+  Group Key: d.iso_dow, t.hour
+  Buffers: shared hit=53167
+  ->  Gather Merge  (cost=89140.61..89179.81 rows=336 width=44) (actual rows=504 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=53167
+        ->  Sort  (cost=88140.59..88141.01 rows=168 width=44) (actual rows=168 loops=3)
+              Sort Key: d.iso_dow, t.hour
+              Sort Method: quicksort  Memory: 38kB
+              Buffers: shared hit=53167
+              Worker 0:  Sort Method: quicksort  Memory: 38kB
+              Worker 1:  Sort Method: quicksort  Memory: 38kB
+              ->  Partial HashAggregate  (cost=88132.70..88134.38 rows=168 width=44) (actual rows=168 loops=3)
+                    Group Key: d.iso_dow, t.hour
+                    Batches: 1  Memory Usage: 64kB
+                    Buffers: shared hit=53153
+                    Worker 0:  Batches: 1  Memory Usage: 64kB
+                    Worker 1:  Batches: 1  Memory Usage: 64kB
+                    ->  Hash Join  (cost=9.23..74362.70 rows=1377000 width=8) (actual rows=1101627 loops=3)
+                          Hash Cond: (f.time_key = t.time_key)
+                          Buffers: shared hit=53153
+                          ->  Hash Join  (cost=6.07..70585.34 rows=1377000 width=8) (actual rows=1101627 loops=3)
+                                Hash Cond: (f.date_key = d.date_key)
+                                Buffers: shared hit=53144
+                                ->  Parallel Seq Scan on fact_trips f  (cost=0.00..66880.00 rows=1377000 width=10) (actual rows=1101627 loops=3)
+                                      Buffers: shared hit=53110
+                                ->  Hash  (cost=3.81..3.81 rows=181 width=6) (actual rows=181 loops=3)
+                                      Buckets: 1024  Batches: 1  Memory Usage: 16kB
+                                      Buffers: shared hit=6
+                                      ->  Seq Scan on dim_date d  (cost=0.00..3.81 rows=181 width=6) (actual rows=181 loops=3)
+                                            Buffers: shared hit=6
+                          ->  Hash  (cost=1.96..1.96 rows=96 width=4) (actual rows=96 loops=3)
+                                Buckets: 1024  Batches: 1  Memory Usage: 12kB
+                                Buffers: shared hit=3
+                                ->  Seq Scan on dim_time t  (cost=0.00..1.96 rows=96 width=4) (actual rows=96 loops=3)
+                                      Buffers: shared hit=3
+Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
+Planning:
+  Buffers: shared hit=16
+Planning Time: 0.216 ms
+Execution Time: 449.948 ms

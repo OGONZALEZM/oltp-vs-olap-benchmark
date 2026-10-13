@@ -1,0 +1,63 @@
+-- B  Postgres star (fact table)
+-- Top 10 pickup areas by revenue (known areas)
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.
+-- Plan times are not benchmark results; see results/benchmark.json.
+-- Q2: top 10 pickup community areas by revenue, with average ticket, excluding unknown areas.
+SELECT a.community_area_id,
+       a.area_name,
+       count(*)          AS trips,
+       sum(f.trip_total) AS revenue,
+       avg(f.trip_total) AS avg_ticket
+FROM fact_trips f
+JOIN dim_area a ON a.area_key = f.pickup_area_key
+WHERE f.pickup_area_key <> 0                      -- exclude unknown areas
+-- area_key is dim_area's primary key: Postgres drops the dependent columns from the group key
+-- (same as A, which groups by community_areas' primary key). DuckDB has no functional-dependency
+-- grouping, so the dependent columns must be listed for the shared SQL to run on C.
+GROUP BY a.area_key, a.community_area_id, a.area_name
+ORDER BY revenue DESC, a.community_area_id
+LIMIT 10;
+
+
+Limit  (cost=85091.62..85091.65 rows=10 width=88) (actual rows=10 loops=1)
+  Buffers: shared hit=53133
+  ->  Sort  (cost=85091.62..85091.82 rows=78 width=88) (actual rows=10 loops=1)
+        Sort Key: (sum(f.trip_total)) DESC, a.community_area_id
+        Sort Method: top-N heapsort  Memory: 26kB
+        Buffers: shared hit=53133
+        ->  Finalize GroupAggregate  (cost=85069.00..85089.93 rows=78 width=88) (actual rows=77 loops=1)
+              Group Key: a.area_key
+              Buffers: shared hit=53133
+              ->  Gather Merge  (cost=85069.00..85087.20 rows=156 width=88) (actual rows=231 loops=1)
+                    Workers Planned: 2
+                    Workers Launched: 2
+                    Buffers: shared hit=53133
+                    ->  Sort  (cost=84068.98..84069.17 rows=78 width=88) (actual rows=77 loops=3)
+                          Sort Key: a.area_key
+                          Sort Method: quicksort  Memory: 39kB
+                          Buffers: shared hit=53133
+                          Worker 0:  Sort Method: quicksort  Memory: 39kB
+                          Worker 1:  Sort Method: quicksort  Memory: 39kB
+                          ->  Partial HashAggregate  (cost=84065.55..84066.53 rows=78 width=88) (actual rows=77 loops=3)
+                                Group Key: a.area_key
+                                Batches: 1  Memory Usage: 48kB
+                                Buffers: shared hit=53119
+                                Worker 0:  Batches: 1  Memory Usage: 48kB
+                                Worker 1:  Batches: 1  Memory Usage: 48kB
+                                ->  Hash Join  (cost=2.75..74028.94 rows=1338215 width=22) (actual rows=1070943 loops=3)
+                                      Hash Cond: (f.pickup_area_key = a.area_key)
+                                      Buffers: shared hit=53119
+                                      ->  Parallel Seq Scan on fact_trips f  (cost=0.00..70322.50 rows=1338215 width=8) (actual rows=1070943 loops=3)
+                                            Filter: (pickup_area_key <> 0)
+                                            Rows Removed by Filter: 30684
+                                            Buffers: shared hit=53110
+                                      ->  Hash  (cost=1.78..1.78 rows=78 width=16) (actual rows=78 loops=3)
+                                            Buckets: 1024  Batches: 1  Memory Usage: 12kB
+                                            Buffers: shared hit=3
+                                            ->  Seq Scan on dim_area a  (cost=0.00..1.78 rows=78 width=16) (actual rows=78 loops=3)
+                                                  Buffers: shared hit=3
+Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
+Planning:
+  Buffers: shared hit=7
+Planning Time: 0.180 ms
+Execution Time: 454.848 ms
