@@ -66,8 +66,16 @@ recorded in `results/benchmark.json`, together with versions, row counts, the ho
   config A (numbers within absolute tolerance 1e-6, text exactly; q3 is compared after sorting by
   its text key because the engines collate text differently). Any mismatch aborts the run before
   timing.
-- **Warm:** 1 untimed warm-up, then 10 timed runs on the same connection; median and nearest-rank
-  p95 (with 10 samples, p95 is the slowest run).
+- **Warm:** immediately before each Postgres config's warm runs, `pg_prewarm` loads that config's
+  tables and secondary indexes into `shared_buffers`, one relation at a time (A: 15 relations,
+  592 MB; B: 18 relations, 548 MB; primary-key indexes excluded: 280 MB each, unused by the four
+  queries and too large to fit alongside). Then 1 untimed warm-up and 10 timed runs on the same
+  connection; median and nearest-rank p95 (with 10 samples, p95 is the slowest run).
+  *Why pre-warm:* both fact tables are larger than `shared_buffers / 4`, so Postgres scans them
+  through a small ring buffer and never keeps them cached; without pre-warming, "warm" Postgres
+  would really be served from the VM's OS page cache. Pre-warming gives Postgres its best case, so
+  the engine gap we report is **conservative**. Every saved Postgres plan shows only
+  `shared hit` buffers, no `read`.
 - **Restart cold:** before every timed cold run the Postgres container is restarted (emptying
   `shared_buffers` and backend caches) and a new connection opened; DuckDB gets a fresh read-only
   instance (empty buffer pool). **This is not a true cold cache:** Docker runs inside the OrbStack
@@ -77,9 +85,77 @@ recorded in `results/benchmark.json`, together with versions, row counts, the ho
   the VM page cache would require restarting the VM or dropping caches as root inside it, which
   was out of scope.
 - **Timing scope:** wall clock around a single query call after the connection is open (send,
-  execute, receive a small result). Postgres timings include a loopback round trip into the VM;
-  DuckDB runs in-process. Both include parse and plan time.
-- **Plans** (`results/plans/`): `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)` and DuckDB
-  `EXPLAIN ANALYZE`, captured in a separate untimed pass after one untimed execution.
+  execute, receive a small result). Both include parse and plan time. Postgres timings include a
+  loopback round trip into the VM; DuckDB runs in-process. The floor is measured with `SELECT 1`
+  timed the same way (median 0.40 ms Postgres, 0.12 ms DuckDB) and recorded in
+  `results/benchmark.json`. B-MV medians (0.3–0.6 ms) sit at that floor, so **B→B-MV ratios are
+  bounded by client round trip** and say "pre-aggregation removes essentially all query work",
+  not a precise factor.
+- **B→C is engine plus platform.** Postgres runs inside the OrbStack Linux VM (8 vCPU, 7.8 GiB);
+  DuckDB runs natively on the macOS host (Apple M3, 4 performance + 4 efficiency cores). The
+  B→C ratio therefore also contains VM-vs-native execution and scheduling differences. At 10–23x
+  (3 threads) this does not change the conclusion, but it is not a pure engine number.
+- **Plans** (`results/plans/`): `EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF)` and DuckDB
+  `EXPLAIN ANALYZE`, captured in a separate untimed pass in the warm state (pre-warmed, then one
+  untimed execution). **Plans document shape, row counts and buffers only; their times are not
+  results.** With per-node timing on, instrumentation inside the VM inflated Postgres execution
+  times 1.2–2.5x, unevenly across plans (an earlier capture made B look 1.8x faster than A on q2
+  while measurements showed A 13% faster), hence `TIMING OFF`.
 - **Physical order:** `oltp.trips`, `star.fact_trips` and the DuckDB fact table are all loaded in
   (start timestamp, trip_id) order, so no config gets a clustering advantage.
+
+## Results and why
+
+Warm medians in ms (10 runs, after verification; full data incl. cold and p95 in
+`results/benchmark.json`). Postgres warm runs are pre-warmed (its best case).
+
+| Query | A 3NF | B star | B-MV | C 3 threads | C 8 threads | A→B | B→C (3t) | B→C (8t) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| q1 Trips, revenue and average fare per month | 607.1 | 393.9 | 0.3 | 17.7 | 10.1 | 1.5x | 22.3x | 39.1x |
+| q2 Top 10 pickup areas by revenue (known areas) | 345.6 | 375.2 | 0.3 | 37.2 | 18.0 | 0.9x | 10.1x | 20.8x |
+| q3 Average tip by payment type and company, one quarter | 308.6 | 358.8 | 0.6 | 18.3 | 10.9 | 0.9x | 19.6x | 32.9x |
+| q4 Day-of-week x hour: trips and average duration | 505.4 | 382.7 | 0.5 | 16.4 | 10.4 | 1.3x | 23.4x | 37.0x |
+
+### The model alone barely helps in Postgres (A→B 0.9–1.5x)
+
+Both A and B scan the full 3.3M-row table in a row store; a star schema does not change how many
+bytes Postgres reads per row. What changes is per-row work, and it cuts both ways:
+
+- **q1, q4: B wins (1.3–1.5x).** A computes `EXTRACT(year/month/isodow/hour ...)` from the
+  timestamp on every row (`Group Key: ((EXTRACT(year FROM trip_start_timestamp))::integer), ...`);
+  B joins small precomputed dimensions and groups by their columns (`Group Key: d.year, d.month`).
+- **q2: roughly even (0.9x).** Both now group by a primary key (`Group Key: ca.community_area_id`
+  in A, `Group Key: a.area_key` in B). The first version of B grouped by
+  `a.community_area_id, a.area_name`, hashing a text column on every row, because
+  `community_area_id` is only `UNIQUE` in `dim_area`, not its primary key. It now groups by
+  `area_key` (dim_area's PK) and Postgres drops the dependent columns from the group key, the same
+  functional-dependency rule A benefits from. DuckDB has no functional-dependency grouping, so
+  the shared SQL still lists the dependent columns; DuckDB groups by all three.
+- **q3: A wins (0.9x).** A range-scans its timestamp index for the quarter
+  (`Parallel Index Scan using trips_start_ts_idx ... actual rows=623752 loops=3`). B cannot use
+  the quarter filter on the fact table: the predicate is on `dim_date`
+  (`Filter: ((year = 2025) AND (quarter = 2))`), and Postgres does not push a dimension filter
+  into the fact scan, so it reads the whole fact table (`Parallel Seq Scan on fact_trips ...
+  actual rows=1101627 loops=3`, i.e. all 3.3M rows) and discards the 43% outside the quarter
+  in the hash join.
+  **Standard mitigation (not applied):** add an explicit range predicate on the fact's own key,
+  `AND f.date_key BETWEEN 20250401 AND 20250630`, which lets Postgres use `fact_date_idx`. It is
+  not applied because it changes the query's shape between configs (the question is stated on the
+  date dimension), and because DuckDB derives it on its own: its plan shows a dynamic filter
+  pushed into the fact scan (`Dynamic Filters: optional: date_key>=20250401 AND optional:
+  date_key<=20250630`).
+
+### The engine is where the gap is (B→C 10–23x at equal thread budget)
+
+Same star schema, same SQL text, same rows, same physical order, and DuckDB limited to Postgres's
+per-query budget of 3 threads: DuckDB is 10–23x faster, 21–39x with its default 8 threads. A
+columnar engine reads only the columns a query touches (a handful of 2–8 byte columns instead of
+~130-byte rows), runs vectorized aggregation over them, and pushes join filters into scans. Given
+the Postgres best case (pre-warmed) and the VM caveat above, this is a conservative engine gap.
+
+### Pre-aggregation removes the work entirely (B-MV)
+
+The materialized views hold the answers at the questions' grain (built in ~2 s), so each query
+reads a few hundred rows at most and its time is the client round trip (B-MV medians 0.3–0.6 ms
+vs a 0.40 ms `SELECT 1` floor). This is a different trade-off (freshness and maintenance for
+speed) and is reported as its own row, never as the same work as querying the fact table.

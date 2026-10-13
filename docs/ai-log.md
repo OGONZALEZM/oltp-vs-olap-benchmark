@@ -70,3 +70,33 @@ Live log. One entry every time the AI generates something that had to be correct
 - **Fix:** `GROUP BY` instead of `DISTINCT`; filter `information_schema` to
   `table_catalog = current_database() AND table_schema = 'main'`; fixture makes the expected
   spelling the majority while still covering the comma and double-space variants.
+
+### 19:10 Benchmark reviewed: benchmark-reviewer ran as a general-purpose agent
+- **Prompt / context:** run the `benchmark-reviewer` subagent on the first benchmark (commit 20a4c9e).
+- **What happened:** the reviewer definition lived in `docs/benchmark-reviewer.md`, not in
+  `.claude/agents/`, so it was not a registered agent type. The first review ran as a
+  general-purpose agent with that file's instructions passed verbatim (read-only).
+- **Fix:** moved to `.claude/agents/benchmark-reviewer.md`; the second review runs as the
+  registered type.
+
+### 19:10 Reviewer findings on the AI-generated benchmark
+- **What the AI generated:** `src/bench/`, `sql/queries/`, the method section of DESIGN.md.
+- **What was wrong (caught by benchmark-reviewer, confirmed against plans and catalog):**
+  1. **q2 star grouping by text.** B's q2 grouped by `a.community_area_id, a.area_name`. In
+     `dim_area` the primary key is `area_key` (`community_area_id` is only UNIQUE), so Postgres
+     hashed the text `area_name` on every row, while A grouped by `community_areas`' primary key
+     alone (functional dependency drops `name`). An unfair per-row cost on B, not a model effect.
+     Fixed: `GROUP BY a.area_key, ...`; plan now shows `Group Key: a.area_key`. B is still 0.9x
+     of A on q2: the asymmetry was real but not the whole story.
+  2. **"Warm" Postgres was not warm.** Both fact tables exceed `shared_buffers / 4`, so seq scans
+     use a ring buffer and never cache them; warm plans showed `read=58591`. Fixed with
+     `pg_prewarm` per config before warm runs and plan capture; all plans now show hits only.
+  3. **Plan timings contradicted measurements.** `EXPLAIN ANALYZE` per-node timing in the VM
+     inflated times 1.2–2.5x unevenly (q2 plans implied B 1.8x faster; measured A 13% faster).
+     Fixed: `TIMING OFF`, plans labelled as shape/rows/buffers only.
+  4. No README (reproducibility check blocking); load-report metadata showed `jit=on` from a load
+     before `jit=off` was pinned; B-MV ratios were round-trip bound without saying so; B→C did not
+     mention VM vs native execution. Fixed: README, reload before the final run, `SELECT 1`
+     baseline recorded, DESIGN notes.
+- **How it was caught:** benchmark-reviewer subagent reading `results/plans/` and catalog sizes.
+- **Fix:** commits aee7472 (code) and the following docs commit; results re-run from a clean tree.
