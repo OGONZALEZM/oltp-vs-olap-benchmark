@@ -4,6 +4,9 @@ Live log. One entry every time the AI generates something that had to be correct
 (test, benchmark-reviewer, manual review) catches an error. This is the raw material for
 `AI_WORKFLOW.md`.
 
+Entry times are the Bogotá time (America/Bogota) of the commit that carried the work or its fix.
+The stack decision predates the repository and uses the first commit's time.
+
 ## Template
 
 ### [time] Short title
@@ -15,7 +18,9 @@ Live log. One entry every time the AI generates something that had to be correct
 
 ---
 
-### 09:15 Stack and data source selection
+## Monday 2026-10-12
+
+### 12:43 Stack and data source selection
 - **Prompt / context:** initial analysis of the assessment with Claude.
 - **Decision:** PokéAPI was ruled out (a catalog with no time dimension and no transactions; the
   fact table would have been 100% synthetic) in favor of Chicago Taxi Trips (2024-), real data
@@ -24,7 +29,7 @@ Live log. One entry every time the AI generates something that had to be correct
 - **Benchmark design:** three configs (Postgres 3NF / Postgres star / DuckDB star) to separate the
   effect of the model from the effect of the engine.
 
-### 12:45 CLAUDE.md data assumptions checked against the live API
+### 12:46 CLAUDE.md data assumptions checked against the live API
 - **Prompt / context:** before any schema, fetch the `ajtu-isnz` column dictionary and a 5-row
   sample, and flag mismatches with what CLAUDE.md assumes.
 - **What the AI generated:** the data-source section of CLAUDE.md (written from general knowledge
@@ -54,7 +59,7 @@ Live log. One entry every time the AI generates something that had to be correct
   cleaning rules, pagination, revenue definition, query 2 semantics, index parity) recorded there.
   Community area names seeded from `igwz-8jzy` into `sql/seed/community_areas.csv`.
 
-### 13:45 Load step: two SQL bugs caught by the Testcontainers integration test
+### 13:52 Load step: two SQL bugs caught by the Testcontainers integration test
 - **Prompt / context:** write step 3.2 (compose, staging/OLTP/star DDL, COPY loader, DuckDB copy).
 - **What the AI generated:** `sql/oltp/load.sql` and `src/transform/build-duckdb.ts`.
 - **What was wrong:**
@@ -71,40 +76,55 @@ Live log. One entry every time the AI generates something that had to be correct
   `table_catalog = current_database() AND table_schema = 'main'`; fixture makes the expected
   spelling the majority while still covering the comma and double-space variants.
 
-### 19:10 Benchmark reviewed: benchmark-reviewer ran as a general-purpose agent
+### 19:49 Reviewer findings on the AI-generated benchmark
+- **What the AI generated:** `src/bench/`, `sql/queries/`, the method section of DESIGN.md.
+- **What was wrong (caught by benchmark-reviewer, confirmed against plans and catalog):**
+  Numbers are review #1's original numbering (`docs/reviews/review-1-benchmark-reviewer.md`).
+  An earlier version of this entry used its own numbering (1–4, with 4 split into a–d) and listed
+  "results not from a clean tree" as a fifth item; that was never a review finding, and review #1's
+  real finding 5 (the `jit=on` load report) was folded into item 4 without its number.
+  - **#1 No README** (blocking for reproducibility). Fixed: README.md with prerequisites, command
+    order, expected results and troubleshooting; `bench` preflight with clear errors (0529b0b).
+  - **#2 "Warm" Postgres was not warm.** Both fact tables exceed `shared_buffers / 4`, so seq
+    scans use a ring buffer and never cache them; warm plans showed `read=58591`. Fixed with
+    `pg_prewarm` per config before warm runs and plan capture; all plans now show hits only.
+  - **#3 A→B contradicted "the model matters", and q2's star query grouped by text.** B's q2
+    grouped by `a.community_area_id, a.area_name`. In `dim_area` the primary key is `area_key`
+    (`community_area_id` is only UNIQUE), so Postgres hashed the text `area_name` on every row,
+    while A grouped by `community_areas`' primary key alone (functional dependency drops `name`).
+    An unfair per-row cost on B, not a model effect. Fixed: `GROUP BY a.area_key, ...`; plan now
+    shows `Group Key: a.area_key`. B is still 0.9x of A on q2: the asymmetry was real but not the
+    whole story. The missing results section was added to DESIGN.md ("Results and why").
+  - **#4 Plan timings contradicted measurements.** `EXPLAIN ANALYZE` per-node timing in the VM
+    inflated times 1.2–2.5x unevenly (q2 plans implied B 1.8x faster; measured A 13% faster).
+    Fixed: `TIMING OFF`, plans labelled as shape/rows/buffers only.
+  - **#5 Load-report metadata showed `jit=on`** from a load before `jit=off` was pinned. Fixed:
+    reload before the final run.
+  - **#6 B-MV ratios were round-trip bound without saying so.** Fixed: `SELECT 1` baseline
+    recorded, ratio labelled "round-trip bound", DESIGN note.
+  - **#7 B→C did not mention VM vs native execution.** Partly fixed: DESIGN note added, but the
+    README headline and DESIGN's conclusion still called the gap "conservative" (review #2).
+- **Not a finding:** results were re-run from a clean tree before committing them (1e8bf35). The
+  earlier version of this entry listed that as an item; it was good practice, not a review
+  finding.
+- **How it was caught:** benchmark-reviewer subagent reading `results/plans/` and catalog sizes.
+- **Fix:** commits aee7472 (code) and the following docs commit; results re-run from a clean tree.
+
+### 19:58 Benchmark reviewed: benchmark-reviewer ran as a general-purpose agent
 - **Prompt / context:** run the `benchmark-reviewer` subagent on the first benchmark (commit 20a4c9e).
 - **What happened:** the reviewer definition lived in `docs/benchmark-reviewer.md`, not in
   `.claude/agents/`, so it was not a registered agent type. The first review ran as a
   general-purpose agent with that file's instructions passed verbatim (read-only).
 - **Fix:** moved to `.claude/agents/benchmark-reviewer.md`. Agent definitions are loaded when a
   session starts, so the type could not be invoked in the session that moved it.
-- **Status:** second review **pending**. It will run as the registered `benchmark-reviewer` agent
-  type in a fresh session, which also means it starts with no context from the session that
-  wrote the code.
+- **Status:** second review **done** as the registered `benchmark-reviewer` agent type in a fresh
+  session, with no context from the session that wrote the code. See the review #2 entry below.
+  Raw outputs: `docs/reviews/review-1-benchmark-reviewer.md`,
+  `docs/reviews/review-2-benchmark-reviewer.md`.
 
-### 19:10 Reviewer findings on the AI-generated benchmark
-- **What the AI generated:** `src/bench/`, `sql/queries/`, the method section of DESIGN.md.
-- **What was wrong (caught by benchmark-reviewer, confirmed against plans and catalog):**
-  1. **q2 star grouping by text.** B's q2 grouped by `a.community_area_id, a.area_name`. In
-     `dim_area` the primary key is `area_key` (`community_area_id` is only UNIQUE), so Postgres
-     hashed the text `area_name` on every row, while A grouped by `community_areas`' primary key
-     alone (functional dependency drops `name`). An unfair per-row cost on B, not a model effect.
-     Fixed: `GROUP BY a.area_key, ...`; plan now shows `Group Key: a.area_key`. B is still 0.9x
-     of A on q2: the asymmetry was real but not the whole story.
-  2. **"Warm" Postgres was not warm.** Both fact tables exceed `shared_buffers / 4`, so seq scans
-     use a ring buffer and never cache them; warm plans showed `read=58591`. Fixed with
-     `pg_prewarm` per config before warm runs and plan capture; all plans now show hits only.
-  3. **Plan timings contradicted measurements.** `EXPLAIN ANALYZE` per-node timing in the VM
-     inflated times 1.2–2.5x unevenly (q2 plans implied B 1.8x faster; measured A 13% faster).
-     Fixed: `TIMING OFF`, plans labelled as shape/rows/buffers only.
-  4. No README (reproducibility check blocking); load-report metadata showed `jit=on` from a load
-     before `jit=off` was pinned; B-MV ratios were round-trip bound without saying so; B→C did not
-     mention VM vs native execution. Fixed: README, reload before the final run, `SELECT 1`
-     baseline recorded, DESIGN notes.
-- **How it was caught:** benchmark-reviewer subagent reading `results/plans/` and catalog sizes.
-- **Fix:** commits aee7472 (code) and the following docs commit; results re-run from a clean tree.
+## Tuesday 2026-10-13
 
-### 10:00 CLAUDE.md moved to the repository root
+### 06:19 CLAUDE.md moved to the repository root
 - **What was wrong:** the project context lived in `docs/CLAUDE.md`. Claude Code only loads
   `CLAUDE.md` automatically from the repository root (and parent directories), so sessions did not
   get it at start: it had to be read explicitly, and every subagent prompt had to point at
@@ -114,3 +134,44 @@ Live log. One entry every time the AI generates something that had to be correct
 - **Fix:** `git mv docs/CLAUDE.md CLAUDE.md`; benchmark-reviewer now points at the root file;
   README layout lists `CLAUDE.md`, `docs/ai-log.md` and the reviewer agent. Historical log entries
   above keep the name as written at the time.
+
+### 06:40 Review #2: "conservative engine gap" claim unsupported
+- **Prompt / context:** run the registered `benchmark-reviewer` agent in a fresh session on HEAD
+  (5da5b70; results from a clean run of aee7472), read-only, then have it verify review #1's fixes.
+  Raw output: `docs/reviews/review-2-benchmark-reviewer.md`.
+- **What the AI generated:** the claim that the B→C engine gap is "conservative" (README headline,
+  DESIGN.md method and conclusion, `metadata.method.warm` in `results/benchmark.json`). The claim
+  **originated in the planning conversation**, as the justification for pre-warming Postgres, not
+  in the code: no measurement backs it, and it was then copied into the code and docs as a
+  conclusion.
+- **What was wrong:**
+  - **#1 (important)** Pre-warming is Postgres's best case for its buffer cache, but three other
+    factors that favour DuckDB are uncontrolled: Postgres runs in the OrbStack VM while DuckDB
+    runs natively; `jit=off` is pinned (q1_A's plan cost is above `jit_above_cost`); DuckDB's
+    memory limit is larger. DESIGN.md even cited "the VM caveat above" as a reason the gap was
+    conservative, which reads it backwards: VM overhead makes the gap larger. The README headline
+    dropped the VM caveat. The 10–23x conclusion stands; the word "conservative" does not.
+  - **#2 (minor)** Timing scope differed: Postgres's clock covered `pg` building row objects,
+    DuckDB's `getRowObjectsJson()` ran after the clock stopped.
+  - **#3 (minor)** One pass, configs in fixed order, n=10 (p95 is the slowest run).
+  - **#4 (minor)** "Cold" only empties the database buffer pool; the VM/host page cache stays
+    warm. Already documented; the label overstated it.
+  - **#5 (minor)** README gaps: network is also needed during `load` (`INSTALL postgres`), and
+    the "Start over" volume name assumed the Compose project name.
+  - **Fix verification of review #1:** all fixed except #7 (VM vs native), partly fixed (same
+    root cause as #1 above). The reviewer could not trace review #1's finding 5 because the raw
+    review was never committed and this log used its own numbering; resolved by committing
+    `docs/reviews/review-1-benchmark-reviewer.md` and renumbering the entry above.
+- **How it was caught:** the independent reviewer, which had no context from the planning
+  conversation, read the claim against DESIGN.md's own VM caveat and `docker-compose.yml`.
+- **Fix:**
+  - Reword "conservative" everywhere to "best case for Postgres's buffer cache; native vs VM and
+    JIT are not controlled", and put the VM caveat in the README headline.
+  - Add a warm-only sensitivity row, B with `jit=on`, reported outside the main ratios.
+  - Move DuckDB's row conversion inside the timed window.
+  - Report min alongside median and p95.
+  - Rename "cold" to "restart (empty buffer pool)".
+  - Fix both README gaps.
+  - List DuckDB inside the same VM, round-robin ordering and more runs in DESIGN.md's "What I
+    left out and why".
+  - Re-run the benchmark from a clean commit.
