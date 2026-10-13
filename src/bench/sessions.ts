@@ -1,6 +1,7 @@
 /**
- * One session per (config, engine). Timing covers sending the query, execution and receiving
- * the (small) result set: it excludes connection setup, which happens before the clock starts.
+ * One session per (config, engine). Timing covers sending the query, execution, receiving the
+ * (small) result set and turning it into JS row objects, for both engines: it excludes
+ * connection setup, which happens before the clock starts.
  * For Postgres this includes a loopback round trip into the OrbStack VM; DuckDB runs in-process.
  */
 import { execFile } from "node:child_process";
@@ -25,10 +26,11 @@ export interface Session {
 export class PgSession implements Session {
   private constructor(private client: pg.Client) {}
 
-  static async open(url: string, searchPath: string): Promise<PgSession> {
+  static async open(url: string, searchPath: string, settings: Record<string, string> = {}): Promise<PgSession> {
     const client = new pg.Client({ connectionString: url });
     await client.connect();
     await client.query(`SET search_path TO ${searchPath}`);
+    for (const [name, value] of Object.entries(settings)) await client.query(`SET ${name} = ${value}`);
     return new PgSession(client);
   }
 
@@ -61,10 +63,13 @@ export class DuckSession implements Session {
   }
 
   async time(sql: string): Promise<Timed> {
+    // Row conversion is inside the clock, as it is for Postgres (pg builds row objects before
+    // query() resolves), so both engines time the same scope.
     const t0 = performance.now();
     const reader = await this.conn.runAndReadAll(sql);
+    const rows = reader.getRowObjectsJson() as Array<Record<string, unknown>>;
     const ms = performance.now() - t0;
-    return { ms, rows: reader.getRowObjectsJson() as Array<Record<string, unknown>>, columns: reader.columnNames() };
+    return { ms, rows, columns: reader.columnNames() };
   }
 
   async explain(sql: string): Promise<string> {
@@ -119,9 +124,9 @@ export async function prewarm(url: string, schema: string, relkinds: string[]): 
 const execFileP = promisify(execFile);
 
 /**
- * "Restart cold" for Postgres: restarting the container empties shared_buffers and every
- * backend cache. It does NOT empty the OrbStack VM's OS page cache, which survives container
- * restarts, so table files are likely still in memory: this is not a true cold cache.
+ * "Restart (empty buffer pool)" for Postgres: restarting the container empties shared_buffers
+ * and every backend cache. It does NOT empty the OrbStack VM's OS page cache, which survives
+ * container restarts, so table files are likely still in memory: this is not a cold cache.
  */
 export async function restartPostgres(container: string, url: string): Promise<void> {
   await execFileP("docker", ["restart", container]);

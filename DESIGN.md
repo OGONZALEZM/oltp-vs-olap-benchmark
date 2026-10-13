@@ -70,22 +70,24 @@ recorded in `results/benchmark.json`, together with versions, row counts, the ho
   tables and secondary indexes into `shared_buffers`, one relation at a time (A: 15 relations,
   592 MB; B: 18 relations, 548 MB; primary-key indexes excluded: 280 MB each, unused by the four
   queries and too large to fit alongside). Then 1 untimed warm-up and 10 timed runs on the same
-  connection; median and nearest-rank p95 (with 10 samples, p95 is the slowest run).
+  connection; min, median and nearest-rank p95 (with 10 samples, p95 is the slowest run).
   *Why pre-warm:* both fact tables are larger than `shared_buffers / 4`, so Postgres scans them
   through a small ring buffer and never keeps them cached; without pre-warming, "warm" Postgres
-  would really be served from the VM's OS page cache. Pre-warming gives Postgres its best case, so
-  the engine gap we report is **conservative**. Every saved Postgres plan shows only
-  `shared hit` buffers, no `read`.
-- **Restart cold:** before every timed cold run the Postgres container is restarted (emptying
-  `shared_buffers` and backend caches) and a new connection opened; DuckDB gets a fresh read-only
-  instance (empty buffer pool). **This is not a true cold cache:** Docker runs inside the OrbStack
+  would really be served from the VM's OS page cache. Pre-warming is the **best case for
+  Postgres's buffer cache; native vs VM and JIT are not controlled** (see below), so it does not
+  make the engine gap conservative. Every saved Postgres plan shows only `shared hit` buffers,
+  no `read`.
+- **Restart (empty buffer pool):** before every timed restart run the Postgres container is
+  restarted (emptying `shared_buffers` and backend caches) and a new connection opened; DuckDB
+  gets a fresh read-only instance (empty buffer pool). **This is not a cold cache:** Docker runs inside the OrbStack
   VM, whose OS page cache survives container restarts, so table files are likely still in VM
   memory. Likewise DuckDB runs on the macOS host and `data/olap.duckdb` stays in the host page
-  cache. Cold numbers therefore measure an empty database buffer cache, not disk reads. Clearing
+  cache. Restart numbers therefore measure an empty database buffer pool, not disk reads. Clearing
   the VM page cache would require restarting the VM or dropping caches as root inside it, which
   was out of scope.
 - **Timing scope:** wall clock around a single query call after the connection is open (send,
-  execute, receive a small result). Both include parse and plan time. Postgres timings include a
+  execute, receive a small result and turn it into JS row objects; the same scope for both
+  engines). Both include parse and plan time. Postgres timings include a
   loopback round trip into the VM; DuckDB runs in-process. The floor is measured with `SELECT 1`
   timed the same way (median 0.40 ms Postgres, 0.12 ms DuckDB) and recorded in
   `results/benchmark.json`. B-MV medians (0.3–0.6 ms) sit at that floor, so **B→B-MV ratios are
@@ -93,8 +95,16 @@ recorded in `results/benchmark.json`, together with versions, row counts, the ho
   not a precise factor.
 - **B→C is engine plus platform.** Postgres runs inside the OrbStack Linux VM (8 vCPU, 7.8 GiB);
   DuckDB runs natively on the macOS host (Apple M3, 4 performance + 4 efficiency cores). The
-  B→C ratio therefore also contains VM-vs-native execution and scheduling differences. At 10–23x
-  (3 threads) this does not change the conclusion, but it is not a pure engine number.
+  B→C ratio therefore also contains VM-vs-native execution and scheduling differences. VM
+  overhead slows Postgres, so it can only make the measured gap larger than the pure engine gap.
+  At 10–23x (3 threads) this does not change the conclusion, but it is not a pure engine number.
+- **JIT sensitivity (B-jit).** `jit=off` is pinned for A and B (JIT compile time is noisy on short
+  aggregates). To bound what that choice costs Postgres, B is also timed warm with
+  `SET jit = on, jit_above_cost = 0`, verified like the other configs and reported in its own
+  `sensitivity` section, never in the A/B/C ratios. JIT has to be forced: B's plan costs
+  (83k–89k) are below the default `jit_above_cost` of 100,000, so `jit=on` at default thresholds
+  would not engage JIT on B at all. Inlining and optimization keep their default thresholds.
+  `jitUsed` records whether each captured plan actually contained a JIT section.
 - **Plans** (`results/plans/`): `EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF)` and DuckDB
   `EXPLAIN ANALYZE`, captured in a separate untimed pass in the warm state (pre-warmed, then one
   untimed execution). **Plans document shape, row counts and buffers only; their times are not
@@ -106,8 +116,8 @@ recorded in `results/benchmark.json`, together with versions, row counts, the ho
 
 ## Results and why
 
-Warm medians in ms (10 runs, after verification; full data incl. cold and p95 in
-`results/benchmark.json`). Postgres warm runs are pre-warmed (its best case).
+Warm medians in ms (10 runs, after verification; full data incl. min, p95 and restart runs with
+an empty buffer pool in `results/benchmark.json`). Postgres warm runs are pre-warmed (its best case).
 
 | Query | A 3NF | B star | B-MV | C 3 threads | C 8 threads | A→B | B→C (3t) | B→C (8t) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -150,8 +160,11 @@ bytes Postgres reads per row. What changes is per-row work, and it cuts both way
 Same star schema, same SQL text, same rows, same physical order, and DuckDB limited to Postgres's
 per-query budget of 3 threads: DuckDB is 10–23x faster, 21–39x with its default 8 threads. A
 columnar engine reads only the columns a query touches (a handful of 2–8 byte columns instead of
-~130-byte rows), runs vectorized aggregation over them, and pushes join filters into scans. Given
-the Postgres best case (pre-warmed) and the VM caveat above, this is a conservative engine gap.
+~130-byte rows), runs vectorized aggregation over them, and pushes join filters into scans.
+Postgres was pre-warmed, which is the best case for Postgres's buffer cache; native vs VM and JIT
+are not controlled. VM overhead makes the measured gap larger than the pure engine gap. It is not
+large enough to explain an order of magnitude, but the number is engine plus platform, not a
+conservative lower bound.
 
 ### Pre-aggregation removes the work entirely (B-MV)
 
@@ -159,3 +172,30 @@ The materialized views hold the answers at the questions' grain (built in ~2 s),
 reads a few hundred rows at most and its time is the client round trip (B-MV medians 0.3–0.6 ms
 vs a 0.40 ms `SELECT 1` floor). This is a different trade-off (freshness and maintenance for
 speed) and is reported as its own row, never as the same work as querying the fact table.
+
+## What I left out and why
+
+The deadline was one day; each item below would make the numbers more robust or the project more
+complete, but none changes the direction of the result.
+
+- **DuckDB inside the same VM.** B→C compares Postgres in the OrbStack VM with DuckDB native on
+  the host. Running the DuckDB CLI in a container over the same file would separate engine from
+  platform. Left out: one more runtime to set up and verify, and VM overhead cannot account for
+  a 10x gap.
+- **Round-robin ordering.** Configs run one after another (A, B, B-MV, C-3t, C-8t, then B-jit), in
+  a single pass. Interleaving them, or repeating the whole suite, would spread laptop drift
+  (thermal state, background load) across configs instead of onto whichever ran last.
+- **More runs.** 10 timed runs per query make p95 the slowest run. More runs (e.g. 50) and an
+  interquartile range would give a real tail estimate. min is reported alongside median and p95
+  as a cheap check on noise.
+- **A second, larger volume.** The window is configurable (`--start` / `--end`), but only the
+  default Jan–Jun 2025 window (3.3M trips) was benchmarked. A run at, say, all of 2024–2025 would
+  show how each config scales, and whether the 1 GB `shared_buffers` best case still holds.
+- **ClickHouse.** A second columnar engine (server, not embedded) would show whether the B→C gap
+  is about columnar storage in general or DuckDB in particular. Out of scope by the brief.
+- **An orchestrator** (Airflow, Dagster). The pipeline is three idempotent npm scripts; a
+  scheduler adds nothing to a one-shot benchmark.
+- **Cloud deployment.** Everything runs locally for reproducibility on one machine; a cloud run
+  would add network and noisy-neighbour variance.
+- **The UI** (`ui/`, a static page reading `results/benchmark.json`). Not built; the console
+  summary, README tables and `results/benchmark.json` carry the results.

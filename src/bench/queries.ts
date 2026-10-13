@@ -15,7 +15,7 @@ export const QUERIES: QueryDef[] = [
   { id: "q4", file: "q4_dow_hour.sql", title: "Day-of-week x hour: trips and average duration" },
 ];
 
-export type ConfigId = "A" | "B" | "B-MV" | "C-3t" | "C-8t";
+export type ConfigId = "A" | "B" | "B-MV" | "C-3t" | "C-8t" | "B-jit";
 
 export interface ConfigDef {
   id: ConfigId;
@@ -25,6 +25,8 @@ export interface ConfigDef {
   sqlDir: "oltp" | "star" | "mv";
   searchPath?: "oltp" | "star";
   threads?: number;
+  /** Postgres only: session settings applied with SET after connecting (sensitivity rows). */
+  settings?: Record<string, string>;
   /** Postgres only: relations loaded into shared_buffers with pg_prewarm before warm runs and plans. */
   prewarm?: { schema: string; relkinds: Array<"r" | "m"> };
 }
@@ -36,6 +38,18 @@ export const CONFIGS: ConfigDef[] = [
   // Primary C row: 3 threads = Postgres's per-query budget (leader + max_parallel_workers_per_gather=2).
   { id: "C-3t", label: "C  DuckDB star, threads=3", engine: "duckdb", sqlDir: "star", threads: 3 },
   { id: "C-8t", label: "C  DuckDB star, threads=8 (default)", engine: "duckdb", sqlDir: "star", threads: 8 },
+];
+
+/**
+ * Sensitivity rows: verified like the main configs and timed warm only, but reported in their
+ * own section of results/benchmark.json and never used in the A/B/C ratios.
+ * B-jit: config B with JIT on (the server pins jit=off for A and B), to bound how much the
+ * pinned setting moves Postgres's numbers. jit_above_cost=0 forces it: B's plan costs
+ * (83k-89k) are below the default 100000, so jit=on alone would never engage JIT on B.
+ * Inlining and optimization keep their default thresholds.
+ */
+export const SENSITIVITY_CONFIGS: ConfigDef[] = [
+  { id: "B-jit", label: "B  Postgres star, JIT forced (sens.)", engine: "postgres", sqlDir: "star", searchPath: "star", settings: { jit: "on", jit_above_cost: "0" }, prewarm: { schema: "star", relkinds: ["r"] } },
 ];
 
 /** Literal parameters for the quarter filter of q3, e.g. "2025-Q2". */

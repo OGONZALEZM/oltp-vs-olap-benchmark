@@ -14,7 +14,7 @@ result is checked to be identical across all configs before anything is timed.
 
 ## Results (Apple M3, 16 GB; Postgres in an OrbStack VM)
 
-Warm median per query in ms, 10 runs. The full results (cold runs, p95, plans and metadata) are in `results/benchmark.json`.
+Warm median per query in ms, 10 runs. The full results (min, median and p95; restart runs with an empty buffer pool; the JIT sensitivity row; plans and metadata) are in `results/benchmark.json`.
 
 | Query | A 3NF | B star | B-MV | C (3 threads) | C (8 threads) |
 |---|---:|---:|---:|---:|---:|
@@ -24,7 +24,7 @@ Warm median per query in ms, 10 runs. The full results (cold runs, p95, plans an
 | q4 Day-of-week x hour: trips and average duration | 505.4 | 382.7 | 0.5 | 16.4 | 10.4 |
 
 - **The model alone (A→B) gives 0.9–1.5x in Postgres.** A star schema does not change how a row store reads data.
-- **The engine (B→C) gives 10–23x at the same 3-thread budget, and 21–39x with DuckDB's default 8 threads.** That is with Postgres pre-warmed into its buffer cache (its best case), so the gap is conservative.
+- **The engine (B→C) gives 10–23x at the same 3-thread budget, and 21–39x with DuckDB's default 8 threads.** Caveat: Postgres runs inside the OrbStack Linux VM and DuckDB natively on the host, so B→C is engine plus platform. Postgres is pre-warmed into its buffer cache: this is the best case for Postgres's buffer cache; native vs VM and JIT are not controlled.
 - **Materialized views (B-MV) remove the query work entirely.** Their times sit at the client round-trip floor, and they are reported as their own row.
 
 
@@ -35,10 +35,12 @@ Methodology, data cleaning and the reasoning behind these numbers: [DESIGN.md](D
 - **Node.js ≥ 20.12** (uses `process.loadEnvFile`) and npm.
 - **Docker with Compose v2** (`docker compose up --wait`). Developed on OrbStack; Docker Desktop
   works too. The `docker` CLI must be on `PATH`: the benchmark restarts the Postgres container
-  between cold runs.
+  between restart runs (empty buffer pool).
 - **Port 5433 free** on localhost (Postgres is published there; override with `PG_PORT` and
   `DATABASE_URL` in `.env`).
-- **Network access** to `data.cityofchicago.org` for the extract step (once).
+- **Network access** to `data.cityofchicago.org` for the extract step (once), and to DuckDB's
+  extension repository during `load` (`INSTALL postgres` for the `ATTACH` path; without it, `load`
+  falls back to exporting the star tables to Parquet).
 - About 6 GB of free disk (raw pages ~0.4 GB, Postgres ~4.3 GB inside the Docker volume,
   DuckDB ~0.13 GB).
 
@@ -61,7 +63,7 @@ are not loaded yet.
 |---|---|---|---|
 | `ingest:extract` | Keyset-paginated download, 50k rows per page, with per-month manifests. Re-runs skip finished months and resume unfinished ones. | 3,313,460 rows in 69 pages | ~15 min without an app token |
 | `load` | COPY into staging → cleaning (rejects to `staging.rejected_trips`) → OLTP → star → `VACUUM (FREEZE, ANALYZE)` → DuckDB copy. Rebuilds everything from scratch on every run. | 3,304,881 trips in each config, 8,579 rejected | ~6.5 min |
-| `bench` | Builds materialized views, verifies results, 1 warm-up + 10 warm runs and 10 restart-cold runs per query and config, then captures plans. | `results/benchmark.json`, `results/plans/*.txt` | ~5 min |
+| `bench` | Builds materialized views, verifies results, 1 warm-up + 10 warm runs and 10 restart (empty buffer pool) runs per query and config, plus a warm-only JIT sensitivity row for B, then captures plans. | `results/benchmark.json`, `results/plans/*.txt` | ~5 min |
 
 `load` fails unless A, B and C end up with identical fact checksums (row count, sum of
 `trip_total` in cents, sum of `trip_seconds`). `bench` fails, before timing anything, unless
@@ -75,7 +77,7 @@ every query returns the same result in every config.
 | `ingest:extract`, `load` | `--end YYYY-MM` / `INGEST_END_MONTH` | `2025-06` |
 | `ingest:extract` | `--concurrency N`, `--page-size N` | 3, 50000 |
 | `load` | `--duckdb-fallback` (load C via Parquet instead of `ATTACH`), `--skip-duckdb` | off |
-| `bench` | `--runs N`, `--warmup N`, `--cold-runs N`, `--skip-cold`, `--quarter YYYY-QN` | 10, 1, 10, off, `2025-Q2` |
+| `bench` | `--runs N`, `--warmup N`, `--restart-runs N`, `--skip-restart`, `--quarter YYYY-QN` | 10, 1, 10, off, `2025-Q2` |
 
 To benchmark a larger volume, widen the window (e.g. `--start 2024-01 --end 2025-06`) for both
 `ingest:extract` and `load`; `--quarter` must fall inside the window.
@@ -94,7 +96,9 @@ npm run typecheck
   (override with `PG_CONTAINER` if you must).
 - **API throttling / timeouts:** the extractor retries with backoff; an app token
   (`SOCRATA_APP_TOKEN`) makes it faster. Interrupted runs resume where they stopped.
-- **Start over:** `npm run db:down && docker volume rm oltp-vs-olap_pgdata && rm -rf data/`.
+- **Start over:** `docker compose down -v && rm -rf data/`. `-v` removes the `pgdata` volume
+  under its real name, `<project>_pgdata`, where the Compose project name is
+  `COMPOSE_PROJECT_NAME` or, by default, the checkout directory's name.
 
 ## Repository layout
 
