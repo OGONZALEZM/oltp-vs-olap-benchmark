@@ -120,11 +120,11 @@
   <p class="meta" id="meta">Loading results/benchmark.json…</p>
 
   <h2>1. Three effects</h2>
-  <p class="sub">Range across the four queries, ratio of warm medians (> 1x means the second config is faster). Restart medians in brackets.</p>
+  <p class="sub">Range across the four queries: ratio of warm medians (> 1x means the second config is faster), with the restart-median range below. Pre-aggregation is shown as time.</p>
   <div class="tiles" id="tiles"></div>
 
   <h2>2. Warm median per query and config</h2>
-  <p class="sub">Milliseconds, log scale, 10 runs each. Hover a bar for the restart median and warm minimum.</p>
+  <p class="sub" id="chart-sub">Milliseconds, log scale. Hover a bar for the restart median and warm minimum.</p>
   <div class="card">
     <div class="chart-wrap"><canvas id="chart" role="img" aria-label="Grouped bar chart of warm median time per query and config, log scale"></canvas></div>
     <details>
@@ -170,15 +170,26 @@
     ` · commit ${m.commit ? m.commit.slice(0, 7) : "?"}${m.dirty ? " (dirty)" : ""}` +
     ` · ${m.factRows ? m.factRows.toLocaleString("en-US") + " trips" : ""} · ${m.runs ?? "?"} runs per query`;
 
-  // 1. Headline tiles.
-  $("tiles").innerHTML = data.headlines.map((h) => `
+  $("chart-sub").textContent = `Milliseconds, log scale, ${m.runs ?? "?"} runs each. Hover a bar for the restart median and warm minimum.`;
+
+  // 1. Headline tiles. Pre-aggregation shows B-MV's time next to the round-trip floor instead of a
+  // ratio: near the floor, the ratio is dominated by round trip and noise (see docs/BENCHMARK.md).
+  const mvMs = data.queries.map((q) => data.cells[q.id]["B-MV"].warm);
+  const msRange = (xs) => { const lo = Math.min(...xs).toFixed(1), hi = Math.max(...xs).toFixed(1); return lo === hi ? `${lo} ms` : `${lo}–${hi} ms`; };
+  $("tiles").innerHTML = data.headlines.map((h) => {
+    const value = h.id === "preagg" ? `≈${msRange(mvMs)}` : formatRange(h.warmMin, h.warmMax);
+    const sub = h.id === "preagg"
+      ? `round-trip floor (SELECT 1): ${m.floorMs.postgres == null ? "–" : m.floorMs.postgres.toFixed(2) + " ms"} · ratio ${formatRange(h.warmMin, h.warmMax)}, not a precise factor`
+      : `restart: ${h.restartMin == null ? "–" : formatRange(h.restartMin, h.restartMax)}`;
+    return `
     <div class="card tile">
       <div class="k">${h.title} · ${h.from}→${h.to}</div>
-      <div class="v">${formatRange(h.warmMin, h.warmMax)}</div>
-      <div class="r">restart: ${h.restartMin == null ? "–" : formatRange(h.restartMin, h.restartMax)}</div>
+      <div class="v">${value}</div>
+      <div class="r">${sub}</div>
       <div class="n">${h.note}</div>
-      ${h.id === "preagg" ? '<span class="badge">Bounded by client round trip</span>' : ""}
-    </div>`).join("");
+      ${h.badge ? `<span class="badge">${h.badge}</span>` : ""}
+    </div>`;
+  }).join("");
 
   // 2. Grouped bar chart (log scale) + table view.
   let chart;

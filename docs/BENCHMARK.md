@@ -1,8 +1,9 @@
 # Benchmark details
 
-Measurement method, noise and caveats behind the results in [DESIGN.md](../DESIGN.md). Every
-number here comes from `results/benchmark.json` (final run, commit `8908555`); plans are in
-`results/plans/`. How the method evolved, and why, is in [ai-log.md](ai-log.md) and the raw
+Measurement method, noise and caveats behind the results in [DESIGN.md](../DESIGN.md). Results
+come from `results/benchmark.json` (final run, commit `8908555`) and plans from `results/plans/`.
+Figures that explain how the method evolved (earlier runs, isolated timing checks, review #1, API
+profiling) come from elsewhere and are sourced in [ai-log.md](ai-log.md). How the method evolved, and why, is in [ai-log.md](ai-log.md) and the raw
 reviews in [reviews/](reviews/).
 
 ## Method
@@ -12,7 +13,7 @@ reviews in [reviews/](reviews/).
 | Row | Engine | Model | Notes |
 |---|---|---|---|
 | A | Postgres 16 | OLTP 3NF (`oltp`) | FK + start-timestamp indexes |
-| B | Postgres 16 | Star (`star.fact_trips`) | btree on fact FKs (parity with A) |
+| B | Postgres 16 | Star (`star.fact_trips`) | btree on every fact FK except `time_key` (6 indexes, as A has 6) |
 | B-MV | Postgres 16 | Materialized views over the star | pre-aggregation; build time reported separately |
 | C threads=3 | DuckDB | Star (same SQL files as B) | **primary C row**: matches Postgres's per-query budget (leader + 2 parallel workers) |
 | C threads=8 | DuckDB | Star | DuckDB default, reported as a separate row |
@@ -34,9 +35,10 @@ recorded in `results/benchmark.json`, together with versions, row counts, the ho
   connection; min, median and nearest-rank p95 (with 10 samples, p95 is the slowest run).
   *Why pre-warm:* both fact tables are larger than `shared_buffers / 4`, so Postgres scans them
   through a small ring buffer and never keeps them cached; without pre-warming, "warm" Postgres
-  would really be served from the VM's OS page cache. Pre-warming is the **best case for
-  Postgres's buffer cache; native vs VM is not controlled, and JIT is bounded by a sensitivity
-  row** (see below), so it does not make the engine gap conservative. Every saved Postgres plan
+  would really be served from the VM's OS page cache. Pre-warming **guarantees buffer
+  hits but showed little or no measurable benefit, because the VM page cache already served the
+  data** (see *Spread and noise*). Native vs VM is not controlled and JIT is bounded by a
+  sensitivity row (see below), so it does not make the engine gap conservative. Every saved Postgres plan
   shows only `shared hit` buffers, no `read`.
 - **Ordering and cool-down:** the benchmark runs query by query. Within a query, configs run in
   round-robin order, rotated by one config per query (recorded as `order` in
@@ -114,6 +116,12 @@ above their minimums; the largest p95/median ratio is 1.3x.
 | q3 | 305.0 / 307.1 / 341.3 | 349.8 / 352.4 / 397.0 | 19.2 / 19.4 / 19.9 | 10.4 / 10.6 / 11.0 |
 | q4 | 467.6 / 480.0 / 548.9 | 333.2 / 345.9 / 387.2 | 16.3 / 16.4 / 16.9 | 7.9 / 8.0 / 9.4 |
 
+**Warm vs restart.** Pre-warming guarantees buffer hits but showed little or no measurable
+benefit in the final run. Restart medians (empty buffer pool) are within 6% of warm medians in 7
+of 8 A/B cells, and 2 of those (q1 B, q4 B) are slightly *faster* than warm, by under 1%. The VM
+page cache already serves the table files after a restart. The exception is A q3, 15% slower on
+restart (352.3 vs 307.1 ms), the one Postgres query that reads through an index.
+
 Every sample is in `results/benchmark.json`. The *Ordering and cool-down* and *Timing scope*
 entries above describe the thermal and wake-up findings and the residual B-MV noise.
 
@@ -135,7 +143,7 @@ B only; A is not covered (see *JIT sensitivity* under Method).
 
 ## Per-query plans: why A→B is small (0.9–1.6x warm, 1.0–1.7x restart)
 
-Both A and B scan the full 3.3M-row table in a row store; a star schema does not change how many
+Both A and B scan the full 3.3M-row table in a row store (except A on q3, below); a star schema does not change how many
 bytes Postgres reads per row. What changes is per-row work, and it cuts both ways:
 
 - **q1, q4: B wins (1.6x and 1.4x warm, 1.7x and 1.4x restart).**

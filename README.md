@@ -10,7 +10,8 @@ A reproducible benchmark of the same four analytical questions over 3.3 million 
 | C | DuckDB | Same star schema, columnar (threads=3 primary row, threads=8 secondary) |
 
 A→B isolates the effect of the **data model**, B→C the effect of the **engine**. Every query's
-result is checked to be identical across all configs before anything is timed.
+result is checked to be the same across all configs (numbers within 1e-6, text exactly) before
+anything is timed.
 
 ## Results (Apple M3, 16 GB; Postgres in an OrbStack VM)
 
@@ -26,7 +27,7 @@ sensitivity row, plans and metadata) are in `results/benchmark.json`.
 | q4 Day-of-week x hour: trips and average duration | 480.0 (482.3 / 467.6) | 345.9 (343.3 / 333.2) | 1.1 (1.5 / 0.9) | 16.4 (18.7 / 16.3) | 8.0 (9.9 / 7.9) |
 
 - **The model alone (A→B) gives 0.9–1.6x on warm medians (1.0–1.7x on restart medians) in Postgres.** A star schema does not change how a row store reads data.
-- **The engine (B→C) gives 9.6–21x on warm medians (9.4–18x on restart medians) at the same 3-thread budget, and 19–44x (18–37x) with DuckDB's default 8 threads.** Caveat: Postgres runs inside the OrbStack Linux VM and DuckDB natively on the host, so B→C is engine plus platform. Postgres is pre-warmed into its buffer cache: this is the best case for Postgres's buffer cache; native vs VM is not controlled, and JIT is bounded by a sensitivity row.
+- **The engine (B→C) gives 9.6–21x on warm medians (9.4–18x on restart medians) at the same 3-thread budget, and 19–44x (18–37x) with DuckDB's default 8 threads.** Caveat: Postgres runs inside the OrbStack Linux VM and DuckDB natively on the host, so B→C is engine plus platform. Postgres is pre-warmed into its buffer cache: pre-warming guarantees buffer hits but showed little or no measurable benefit, because the VM page cache already served the data (restart medians within 6% in 7 of 8 A/B cells). Native vs VM is not controlled; JIT is bounded by a sensitivity row.
 - **Forcing JIT on for B gives 0.9x of B's warm medians** (below 1x means slower with JIT), so the pinned `jit=off` does not explain the engine gap.
 - **Materialized views (B-MV) remove the query work entirely.** Their times are within about 1 ms of the client round-trip floor, and they are reported as their own row.
 
@@ -45,6 +46,8 @@ method, noise, caveats and per-query plans: [docs/BENCHMARK.md](docs/BENCHMARK.m
 - **Network access** to `data.cityofchicago.org` for the extract step (once), and to DuckDB's
   extension repository during `load` (`INSTALL postgres` for the `ATTACH` path; without it, `load`
   falls back to exporting the star tables to Parquet).
+- **Network access to cdnjs.cloudflare.com** when viewing the results page (`npm run ui` loads
+  Chart.js from the CDN).
 - About 6 GB of free disk (raw pages ~0.4 GB, Postgres ~4.3 GB inside the Docker volume,
   DuckDB ~0.13 GB).
 
@@ -67,8 +70,8 @@ are not loaded yet.
 | Step | What it does | Expected result | Time (M3, 16 GB) |
 |---|---|---|---|
 | `ingest:extract` | Keyset-paginated download, 50k rows per page, with per-month manifests. Re-runs skip finished months and resume unfinished ones. | 3,313,460 rows in 69 pages | ~15 min without an app token |
-| `load` | COPY into staging → cleaning (rejects to `staging.rejected_trips`) → OLTP → star → `VACUUM (FREEZE, ANALYZE)` → DuckDB copy. Rebuilds everything from scratch on every run. | 3,304,881 trips in each config, 8,579 rejected | ~6.5 min |
-| `bench` | Builds materialized views, verifies results, 1 warm-up + 10 warm runs and 10 restart (empty buffer pool) runs per query and config, plus a warm-only JIT sensitivity row for B, then captures plans. Configs run round-robin per query, with a 10 s idle pause before each (query, config) block. | `results/benchmark.json`, `results/plans/*.txt` | ~7 min |
+| `load` | COPY into staging → cleaning (rejects to `staging.rejected_trips`) → OLTP → star → `VACUUM (FREEZE, ANALYZE)` → DuckDB copy. Rebuilds everything from scratch on every run. | 3,304,881 trips in each config, 8,579 rejected | ~5.5 min |
+| `bench` | Builds materialized views, verifies results, 1 warm-up + 10 warm runs and 10 restart (empty buffer pool) runs per query and config, plus a warm-only JIT sensitivity row for B, then captures plans. Configs run round-robin per query, with a 10 s idle pause before each warm (query, config) block. | `results/benchmark.json`, `results/plans/*.txt` | ~7 min |
 
 `load` fails unless A, B and C end up with identical fact checksums (row count, sum of
 `trip_total` in cents, sum of `trip_seconds`). `bench` fails, before timing anything, unless

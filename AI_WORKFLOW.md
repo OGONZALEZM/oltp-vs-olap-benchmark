@@ -10,8 +10,9 @@ reviewer output) and the git history.
 - **`CLAUDE.md`** holds the project context: the hard constraints, the verified data facts, the
   approved cleaning rules and the benchmark rules. It is loaded at the start of every session.
 - **`benchmark-reviewer` subagent** (`.claude/agents/`): a read-only reviewer for fairness and
-  correctness. Reviews #2 and #3 ran in a session other than the one that wrote the code, so the
-  reviewer had none of its context. Review #3's prompt did not even say what had changed.
+  correctness. Review #2 ran in a session other than the one that wrote the code, so the reviewer
+  had none of its context. Reviews #3 and #4 ran in the same session, as subagents with their own
+  context and a neutral prompt that did not say what had changed.
 - **Testcontainers** integration tests against a real Postgres 16, with no database mocks.
 - **`docs/ai-log.md`**: one entry for every AI output that had to be corrected, written when it
   happened.
@@ -51,7 +52,7 @@ reviewer output) and the git history.
 | # | What the AI produced | What was wrong | Caught by |
 |---|---|---|---|
 | 1 | Data assumptions in CLAUDE.md, from general knowledge | Negative fares, duplicate trips, revenue as a sum of parts, a 40-char taxi id: all false | Live API profiling (SoQL aggregates) before any schema |
-| 2 | Load SQL | `DISTINCT` with a collated `ORDER BY`; duplicate columns after `ATTACH` | Testcontainers integration test |
+| 2 | Load step (SQL and the DuckDB loader) | `DISTINCT` with a collated `ORDER BY`; duplicate columns after `ATTACH` (in `build-duckdb.ts`) | Testcontainers integration test |
 | 3 | Star q2 | Grouped by a text column; A grouped by a primary key | Reviewer #1, reading the plans |
 | 4 | "Warm" Postgres runs | Fact tables bypassed `shared_buffers` (ring buffer, `read=` in the plans) | Reviewer #1 |
 | 5 | Plans with per-node timing | Timing overhead inflated times 1.2–2.5x, unevenly | Reviewer #1 |
@@ -77,9 +78,10 @@ reviewer output) and the git history.
 - **Provenance.** Every published run was made from a clean commit, and `results/benchmark.json`
   records that commit and `dirty: false`. Results are committed separately from code.
 - **The plans back the claims.** No Postgres plan reads from disk, every B-jit plan contains JIT,
-  and each plan detail DESIGN quotes is checked against `results/plans/`.
-- **Three independent reviews**, with their raw output committed. Each finding was fixed or
-  documented, and the next review verified the fixes.
+  and each plan detail `docs/BENCHMARK.md` quotes is checked against `results/plans/`.
+- **Four independent reviews**, with their raw output committed. Each finding was fixed or
+  documented. Reviews #2 and #3 verified the previous fixes; review #4 checked that every number
+  and claim in the docs and UI matches the results and the code.
 - **Methodology changed only for a demonstrated cause**, never because of where the results
   pointed:
   - pre-warming, because plans showed `read=` buffers;

@@ -54,6 +54,21 @@ describe("results UI", () => {
     }
   });
 
+  it("pre-aggregation is shown as time next to the round-trip floor, engine carries its caveat", async () => {
+    const floor = data.meta.floorMs.postgres!;
+    expect(floor).toBeGreaterThan(0);
+    for (const q of data.queries) {
+      const mv = data.cells[q.id]!["B-MV"]!.warm;
+      // Near the floor: the B→B-MV ratio is round-trip bound, so the tile shows time, not the ratio.
+      expect(mv).toBeLessThan(10 * floor + 1);
+    }
+    const byId = Object.fromEntries(data.headlines.map((h) => [h.id, h]));
+    expect(byId.preagg!.badge).toMatch(/round trip/);
+    expect(byId.engine!.note).toMatch(/engine plus platform/);
+    const page = await (await fetch(`${base}/ui/`)).text();
+    expect(page).toContain("round-trip floor");
+  });
+
   it("every plan the viewer offers exists", async () => {
     expect(data.plans.length).toBe(4 * 6);
     for (const p of data.plans) {

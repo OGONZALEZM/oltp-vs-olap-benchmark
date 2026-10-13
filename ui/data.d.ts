@@ -15,6 +15,7 @@ export interface Headline {
   from: string;
   to: string;
   note: string;
+  badge?: string;
   warmMin: number;
   warmMax: number;
   restartMin: number | null;
@@ -33,6 +34,7 @@ export interface Benchmark {
     dirty: boolean | null;
     startedAt: string | null;
     runs: number | null;
+    floorMs: { postgres: number | null; duckdb: number | null };
     factRows: number | null;
     host: unknown;
   };

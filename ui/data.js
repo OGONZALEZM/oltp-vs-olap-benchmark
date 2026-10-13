@@ -12,9 +12,11 @@ const HEADLINES = [
   { id: "model", title: "Model", label: "A→B (model)", from: "A", to: "B",
     note: "Postgres 3NF → Postgres star, same engine" },
   { id: "engine", title: "Engine", label: "B→C (engine, 3 threads)", from: "B", to: "C-3t",
-    note: "Postgres star → DuckDB star, same SQL, 3 threads each" },
+    note: "Postgres star → DuckDB star, same SQL, 3 threads each. Postgres runs in the OrbStack VM, DuckDB natively: engine plus platform",
+    badge: "Engine plus platform" },
   { id: "preagg", title: "Pre-aggregation", label: "B→B-MV (pre-agg, round-trip bound)", from: "B", to: "B-MV",
-    note: "Fact table → materialized views. Bounded by client round trip: a lower bound on the work removed, not a precise factor" },
+    note: "Fact table → materialized views. Shown as time, not as a ratio: B-MV sits near the client round-trip floor, so the ratio is mostly noise",
+    badge: "Bounded by client round trip" },
 ];
 
 function fail(msg) {
@@ -92,6 +94,10 @@ export function parseBenchmark(raw) {
       dirty: m.git?.dirty ?? null,
       startedAt: m.startedAt ?? null,
       runs: m.parameters?.runs ?? null,
+      floorMs: {
+        postgres: r.roundTripBaselineMs?.postgres?.medianMs ?? null,
+        duckdb: r.roundTripBaselineMs?.duckdb?.medianMs ?? null,
+      },
       factRows: r.metadata?.rowCounts?.["star.fact_trips"] ?? null,
       host: m.host ?? null,
     },

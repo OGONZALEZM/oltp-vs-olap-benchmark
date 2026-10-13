@@ -38,7 +38,7 @@ plans: [docs/BENCHMARK.md](docs/BENCHMARK.md).
   - `dim_taxi`.
 
   Missing areas and taxis map to an `Unknown` member (key 0). The fact table has btree indexes on
-  its FKs, mirroring A. B is built from A's tables, so both hold the same cleaned rows.
+  its FKs except `time_key` (6 indexes, matching A's 6; no query needs `time_key`). B is built from A's tables, so both hold the same cleaned rows.
 - **B-MV.** Materialized views at each question's grain, reported as their own row with their
   build time. Pre-aggregation is never presented as the same work as querying the fact table.
 - **C, DuckDB.** The same star tables, copied from Postgres with `ATTACH` (Parquet as the
@@ -64,7 +64,7 @@ medians, with restart medians in parentheses.
 **Three effects, three sizes:**
 
 1. **The model barely matters in a row store (A→B 0.9–1.6x).**
-   - Both configs read every row.
+   - Both configs read every row, except A on q3, which range-scans its timestamp index.
    - The star wins only where it replaces per-row `EXTRACT` with precomputed dimensions (q1, q4).
    - q2 and q3 are roughly even. On q3 the plans differ (A range-scans its timestamp index; B scans
      the whole fact table because Postgres does not push the `dim_date` filter into it), but the
@@ -73,8 +73,9 @@ medians, with restart medians in parentheses.
    - Same schema, SQL, rows and thread budget.
    - DuckDB reads only the needed columns, aggregates vectorized and pushes join filters into scans.
    - Caveat: Postgres runs in the OrbStack VM and DuckDB natively, so B→C is engine plus platform.
-     Pre-warming is the best case for Postgres's buffer cache; native vs VM is not controlled, and
-     JIT is bounded by a sensitivity row (forcing JIT made B 0.9x, i.e. slower).
+     Pre-warming guarantees buffer hits but showed little or no measurable benefit, because the VM
+     page cache already served the data (details in docs/BENCHMARK.md). Native vs VM is not
+     controlled; JIT is bounded by a sensitivity row (forcing JIT made B 0.9x, i.e. slower).
 3. **Pre-aggregation removes the work (B-MV about 1 ms, near the client round-trip floor).** It
    trades freshness and maintenance (a 1.9 s rebuild) for speed. It is a different design, not a
    faster query.
@@ -98,10 +99,11 @@ The deadline was one day; none of these would change the direction of the result
 About 33M trips: roughly 4–5 GB per fact table in Postgres, and about 1.3 GB in DuckDB at today's
 compression.
 
-- **Postgres no longer gets a cached best case.** The fact table would be several times
+- **Postgres no longer fits in its buffer cache.** The fact table would be several times
   `shared_buffers`, so warm runs become I/O-bound. I would partition `fact_trips` by month (range
-  partitions, BRIN on `date_key`) so q3's quarter filter prunes partitions instead of scanning
-  everything.
+  partitions, BRIN on `date_key`). Pruning needs a predicate on the fact's own `date_key`: q3 as
+  written filters `dim_date`, which Postgres does not push into the fact scan, so it would also
+  need the explicit `f.date_key BETWEEN ...` range described in docs/BENCHMARK.md.
 - **Pre-aggregation becomes the default serving path.** Refresh by appending only new months'
   aggregates, instead of rebuilding the materialized views.
 - **Extract and load in Parquet.** Write pages as Parquet, load DuckDB straight from them, and
