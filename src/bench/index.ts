@@ -1,19 +1,23 @@
 /**
- * npm run bench [-- --runs 10 --warmup 1 --restart-runs 10 --quarter 2025-Q2 --skip-restart]
+ * npm run bench [-- --runs 10 --warmup 1 --restart-runs 10 --cooldown-ms 2000 --quarter 2025-Q2 --skip-restart]
  *
  * Phases (each config runs alone; nothing else queries the engines meanwhile):
  *   1. Build materialized views for B-MV (build time reported).
  *   2. Verify: every query returns the same result in every config (main and sensitivity), or
  *      the benchmark fails.
- *   3. Warm: per config and query, `warmup` untimed runs then `runs` timed runs. Sensitivity
- *      configs (B-jit) are timed warm only and reported in their own section.
- *   4. Restart (empty buffer pool): Postgres container restarted before every timed run; DuckDB
- *      opened fresh. Main configs only.
+ *   3. Warm: per query, configs in round-robin order (rotated by one per query); per (query,
+ *      config) block, `warmup` untimed runs then `runs` timed runs. Sensitivity configs (B-jit)
+ *      are timed warm only and reported in their own section.
+ *   4. Restart (empty buffer pool): same order; Postgres container restarted before every timed
+ *      run; DuckDB opened fresh. Main configs only.
+ *   Every timed run (warm and restart) is preceded by a `cooldown-ms` idle pause, so a fanless
+ *   host does not heat up over a block and penalize whichever config runs late in it.
  *   5. Plans: EXPLAIN (ANALYZE, BUFFERS) / EXPLAIN ANALYZE in a separate, untimed pass.
  * Output: results/benchmark.json, results/plans/*.txt and a console summary.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
+import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { connect, databaseUrl, runSqlFile, scalar } from "../db.js";
 import { loadDotEnv } from "../ingest/config.js";
@@ -43,6 +47,7 @@ async function main(): Promise<void> {
       runs: { type: "string", default: "10" },
       warmup: { type: "string", default: "1" },
       "restart-runs": { type: "string", default: "10" },
+      "cooldown-ms": { type: "string", default: "2000" },
       quarter: { type: "string", default: "2025-Q2" },
       "skip-restart": { type: "boolean", default: false },
     },
@@ -51,6 +56,10 @@ async function main(): Promise<void> {
   const runs = Number(values.runs);
   const warmup = Number(values.warmup);
   const restartRuns = values["skip-restart"] ? 0 : Number(values["restart-runs"]);
+  const cooldownMs = Number(values["cooldown-ms"]);
+  const cooldown = () => (cooldownMs > 0 ? sleep(cooldownMs) : Promise.resolve());
+  /** Round-robin: query i runs the configs starting from config i, so no config is always last. */
+  const rotated = <T>(xs: T[], i: number): T[] => xs.map((_, j) => xs[(i + j) % xs.length]!);
   const params = quarterParams(values.quarter!);
   const startedAt = new Date().toISOString();
 
@@ -139,41 +148,48 @@ async function main(): Promise<void> {
   }
   log(`round-trip floor (SELECT 1): postgres ${roundTripBaseline.postgres!.medianMs.toFixed(2)} ms, duckdb ${roundTripBaseline.duckdb!.medianMs.toFixed(2)} ms`);
 
-  // 3. Warm runs. Postgres configs are pre-warmed into shared_buffers immediately before their runs.
+  // 3. Warm runs, query by query with configs in round-robin order. Each Postgres (query, config)
+  // block is pre-warmed into shared_buffers immediately before it: A and B together do not fit in
+  // 1 GB, so runs of different configs cannot be interleaved without evicting each other.
   const warm = new Map<string, Stats>();
   const prewarmed: Record<string, PrewarmedRelation[]> = {};
-  for (const c of ALL_CONFIGS) {
-    if (c.prewarm) {
-      prewarmed[c.id] = await prewarm(databaseUrl(), c.prewarm.schema, c.prewarm.relkinds);
-      log(`prewarm ${c.id}: ${prewarmed[c.id]!.length} relations, ${prewarmed[c.id]!.reduce((s, r) => s + r.mb, 0).toFixed(0)} MB`);
-    }
-    const s = await openSession(c);
-    try {
-      for (const q of QUERIES) {
+  const order: Record<string, string[]> = {};
+  for (const [qi, q] of QUERIES.entries()) {
+    const configs = rotated(ALL_CONFIGS, qi);
+    order[q.id] = configs.map((c) => c.id);
+    for (const c of configs) {
+      if (c.prewarm) prewarmed[c.id] = await prewarm(databaseUrl(), c.prewarm.schema, c.prewarm.relkinds);
+      const s = await openSession(c);
+      try {
         const sql = sqlText.get(key(c.id, q.id))!;
         for (let i = 0; i < warmup; i++) await s.time(sql);
         const samples: number[] = [];
-        for (let i = 0; i < runs; i++) samples.push((await s.time(sql)).ms);
+        for (let i = 0; i < runs; i++) {
+          await cooldown();
+          samples.push((await s.time(sql)).ms);
+        }
         warm.set(key(c.id, q.id), summarize(samples));
         log(`warm ${c.id.padEnd(5)} ${q.id}: median ${warm.get(key(c.id, q.id))!.medianMs.toFixed(1)} ms`);
+      } finally {
+        await s.close();
       }
-    } finally {
-      await s.close();
     }
   }
+  for (const [id, rels] of Object.entries(prewarmed)) log(`prewarm ${id}: ${rels.length} relations, ${rels.reduce((s, r) => s + r.mb, 0).toFixed(0)} MB`);
 
   // 4. Restart (empty buffer pool) runs: one restart (Postgres) or fresh instance (DuckDB) per
-  // timed run. Main configs only.
+  // timed run. Main configs only, same round-robin order.
   const restart = new Map<string, Stats>();
   if (restartRuns > 0) {
-    for (const c of CONFIGS) {
-      for (const q of QUERIES) {
+    for (const [qi, q] of QUERIES.entries()) {
+      for (const c of rotated(CONFIGS, qi)) {
         const sql = sqlText.get(key(c.id, q.id))!;
         const samples: number[] = [];
         for (let i = 0; i < restartRuns; i++) {
           if (c.engine === "postgres") await restartPostgres(PG_CONTAINER, databaseUrl());
           const s = await openSession(c);
           try {
+            await cooldown();
             samples.push((await s.time(sql)).ms);
           } finally {
             await s.close();
@@ -267,9 +283,10 @@ async function main(): Promise<void> {
       },
       rowCounts,
       loadReport: JSON.parse(await readFile("data/load-report.json", "utf8").catch(() => "null")),
-      parameters: { runs, warmup, restartRuns, quarter: values.quarter },
+      parameters: { runs, warmup, restartRuns, cooldownMs, quarter: values.quarter },
       method: {
         timing: "Wall clock around one query call, after the connection is open: send, execute, receive the (small) result and turn it into JS row objects (same scope for both engines). Postgres timings include a loopback round trip into the Docker VM; DuckDB is in-process.",
+        ordering: `Query by query; within a query, configs run in round-robin order (rotated by one config per query; see \`order\`), each as one block of warm-up plus timed runs. Runs of different configs are not interleaved: A and B do not fit in shared_buffers together, so interleaving would evict the pre-warmed tables. A ${cooldownMs} ms idle pause precedes every timed run (warm and restart): without it, on the fanless host, back-to-back runs appear to heat the machine (in an earlier run, Postgres warm medians exceeded restart medians in 6 of 8 A/B cells) and inflate the medians of whichever config runs late.`,
         statistics: "min, median and nearest-rank p95 of the timed runs (with 10 runs, p95 is the slowest run)",
         warm: `${warmup} untimed warm-up run(s), then ${runs} timed runs on the same connection. Immediately before each Postgres config's warm runs, its tables and secondary indexes are loaded into shared_buffers with pg_prewarm, one relation at a time (primary-key indexes excluded: unused and too large to fit alongside). This is the best case for Postgres's buffer cache; native vs VM is not controlled, and JIT is bounded by a sensitivity row (B-jit).`,
         restart: "Restart (empty buffer pool): the Postgres container is restarted before every timed run (empties shared_buffers and backend caches) and a new connection is opened; DuckDB gets a fresh read-only instance (empty buffer pool). The OrbStack VM's OS page cache survives container restarts and the DuckDB file stays in the host page cache, so this is not a cold cache: it measures an empty database buffer pool, not disk reads.",
@@ -284,6 +301,7 @@ async function main(): Promise<void> {
     materializedViewBuildMs: mvBuildMs,
     roundTripBaselineMs: roundTripBaseline,
     prewarmed,
+    order,
     verification,
     configs: CONFIGS.map(({ id, label, engine, threads }) => ({ id, label, engine, threads: threads ?? null })),
     queries: QUERIES.map(({ id, title }) => ({ id, title })),

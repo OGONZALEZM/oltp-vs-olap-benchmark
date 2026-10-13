@@ -14,18 +14,20 @@ result is checked to be identical across all configs before anything is timed.
 
 ## Results (Apple M3, 16 GB; Postgres in an OrbStack VM)
 
-Warm median per query in ms, 10 runs. The full results (min, median and p95; restart runs with an empty buffer pool; the JIT sensitivity row; plans and metadata) are in `results/benchmark.json`.
+Each cell is **warm median (restart median / warm min)** in ms, 10 runs each. Warm runs are
+pre-warmed; restart runs start from an empty buffer pool. The full results (p95, the JIT
+sensitivity row, plans and metadata) are in `results/benchmark.json`.
 
 | Query | A 3NF | B star | B-MV | C (3 threads) | C (8 threads) |
 |---|---:|---:|---:|---:|---:|
-| q1 Trips, revenue and average fare per month | 584.5 | 403.5 | 0.2 | 18.9 | 7.9 |
-| q2 Top 10 pickup areas by revenue (known areas) | 393.6 | 437.5 | 0.2 | 35.9 | 22.0 |
-| q3 Average tip by payment type and company, one quarter | 340.7 | 363.1 | 0.5 | 18.8 | 16.8 |
-| q4 Day-of-week x hour: trips and average duration | 586.8 | 365.0 | 0.5 | 16.4 | 9.7 |
+| q1 Trips, revenue and average fare per month | 584.5 (633.0 / 567.4) | 403.5 (364.9 / 357.7) | 0.2 (1.2 / 0.2) | 18.9 (20.2 / 17.4) | 7.9 (10.9 / 7.8) |
+| q2 Top 10 pickup areas by revenue (known areas) | 393.6 (347.2 / 335.8) | 437.5 (350.1 / 340.3) | 0.2 (1.4 / 0.2) | 35.9 (37.4 / 35.6) | 22.0 (20.3 / 18.2) |
+| q3 Average tip by payment type and company, one quarter | 340.7 (357.9 / 301.5) | 363.1 (361.8 / 352.8) | 0.5 (1.9 / 0.4) | 18.8 (20.3 / 18.4) | 16.8 (12.3 / 13.1) |
+| q4 Day-of-week x hour: trips and average duration | 586.8 (478.7 / 477.3) | 365.0 (347.1 / 331.2) | 0.5 (1.7 / 0.4) | 16.4 (18.8 / 16.2) | 9.7 (11.6 / 9.4) |
 
-- **The model alone (A→B) gives 0.9–1.6x in Postgres.** A star schema does not change how a row store reads data.
-- **The engine (B→C) gives 12–22x at the same 3-thread budget, and 20–51x with DuckDB's default 8 threads.** Caveat: Postgres runs inside the OrbStack Linux VM and DuckDB natively on the host, so B→C is engine plus platform. Postgres is pre-warmed into its buffer cache: this is the best case for Postgres's buffer cache; native vs VM is not controlled, and JIT is bounded by a sensitivity row.
-- **Forcing JIT on for B moves it 0.9–1.2x**, within run-to-run noise, so the pinned `jit=off` does not explain the engine gap.
+- **The model alone (A→B) gives 0.9–1.6x on warm medians (1.0–1.7x on restart medians) in Postgres.** A star schema does not change how a row store reads data.
+- **The engine (B→C) gives 12–22x on warm medians (9.4–18x on restart medians) at the same 3-thread budget, and 20–51x (17–33x) with DuckDB's default 8 threads.** Caveat: Postgres runs inside the OrbStack Linux VM and DuckDB natively on the host, so B→C is engine plus platform. Postgres is pre-warmed into its buffer cache: this is the best case for Postgres's buffer cache; native vs VM is not controlled, and JIT is bounded by a sensitivity row.
+- **Forcing JIT on for B moves it 0.9–1.2x** against B's warm medians, so the pinned `jit=off` does not explain the engine gap.
 - **Materialized views (B-MV) remove the query work entirely.** Their times sit at the client round-trip floor, and they are reported as their own row.
 
 
@@ -64,7 +66,7 @@ are not loaded yet.
 |---|---|---|---|
 | `ingest:extract` | Keyset-paginated download, 50k rows per page, with per-month manifests. Re-runs skip finished months and resume unfinished ones. | 3,313,460 rows in 69 pages | ~15 min without an app token |
 | `load` | COPY into staging → cleaning (rejects to `staging.rejected_trips`) → OLTP → star → `VACUUM (FREEZE, ANALYZE)` → DuckDB copy. Rebuilds everything from scratch on every run. | 3,304,881 trips in each config, 8,579 rejected | ~6.5 min |
-| `bench` | Builds materialized views, verifies results, 1 warm-up + 10 warm runs and 10 restart (empty buffer pool) runs per query and config, plus a warm-only JIT sensitivity row for B, then captures plans. | `results/benchmark.json`, `results/plans/*.txt` | ~5 min |
+| `bench` | Builds materialized views, verifies results, 1 warm-up + 10 warm runs and 10 restart (empty buffer pool) runs per query and config, plus a warm-only JIT sensitivity row for B, then captures plans. Configs run round-robin per query, with a 2 s idle pause before every timed run. | `results/benchmark.json`, `results/plans/*.txt` | ~5 min |
 
 `load` fails unless A, B and C end up with identical fact checksums (row count, sum of
 `trip_total` in cents, sum of `trip_seconds`). `bench` fails, before timing anything, unless
@@ -78,7 +80,7 @@ every query returns the same result in every config.
 | `ingest:extract`, `load` | `--end YYYY-MM` / `INGEST_END_MONTH` | `2025-06` |
 | `ingest:extract` | `--concurrency N`, `--page-size N` | 3, 50000 |
 | `load` | `--duckdb-fallback` (load C via Parquet instead of `ATTACH`), `--skip-duckdb` | off |
-| `bench` | `--runs N`, `--warmup N`, `--restart-runs N`, `--skip-restart`, `--quarter YYYY-QN` | 10, 1, 10, off, `2025-Q2` |
+| `bench` | `--runs N`, `--warmup N`, `--restart-runs N`, `--skip-restart`, `--cooldown-ms N`, `--quarter YYYY-QN` | 10, 1, 10, off, 2000, `2025-Q2` |
 
 To benchmark a larger volume, widen the window (e.g. `--start 2024-01 --end 2025-06`) for both
 `ingest:extract` and `load`; `--quarter` must fall inside the window.
