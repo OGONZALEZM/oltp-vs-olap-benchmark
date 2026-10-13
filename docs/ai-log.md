@@ -76,8 +76,11 @@ Live log. One entry every time the AI generates something that had to be correct
 - **What happened:** the reviewer definition lived in `docs/benchmark-reviewer.md`, not in
   `.claude/agents/`, so it was not a registered agent type. The first review ran as a
   general-purpose agent with that file's instructions passed verbatim (read-only).
-- **Fix:** moved to `.claude/agents/benchmark-reviewer.md`; the second review runs as the
-  registered type.
+- **Fix:** moved to `.claude/agents/benchmark-reviewer.md`. Agent definitions are loaded when a
+  session starts, so the type could not be invoked in the session that moved it.
+- **Status:** second review **pending**. It will run as the registered `benchmark-reviewer` agent
+  type in a fresh session, which also means it starts with no context from the session that
+  wrote the code.
 
 ### 19:10 Reviewer findings on the AI-generated benchmark
 - **What the AI generated:** `src/bench/`, `sql/queries/`, the method section of DESIGN.md.
