@@ -40,7 +40,9 @@ export class PgSession implements Session {
   }
 
   async explain(sql: string): Promise<string> {
-    const res = await this.client.query({ text: `EXPLAIN (ANALYZE, BUFFERS, SETTINGS) ${sql}`, rowMode: "array" });
+    // TIMING OFF: per-node timing instrumentation inside the VM inflates execution time
+    // unevenly (1.2-2.5x), so plans are for shape, row counts and buffers only.
+    const res = await this.client.query({ text: `EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF) ${sql}`, rowMode: "array" });
     return res.rows.map((r) => String(r[0])).join("\n");
   }
 
@@ -75,6 +77,42 @@ export class DuckSession implements Session {
   async close(): Promise<void> {
     this.conn.closeSync();
     this.instance.closeSync();
+  }
+}
+
+export interface PrewarmedRelation {
+  relation: string;
+  mb: number;
+}
+
+/**
+ * Loads a config's relations into shared_buffers, one relation at a time: every table of the
+ * given kinds in the schema plus their secondary indexes. Primary-key indexes are excluded (280 MB
+ * each, unused by the benchmark queries, and they would not fit next to the heap in 1 GB).
+ * Without this, seq scans of tables larger than shared_buffers/4 go through a small ring buffer
+ * and never stay cached, so "warm" Postgres would be served from the OS page cache.
+ */
+export async function prewarm(url: string, schema: string, relkinds: string[]): Promise<PrewarmedRelation[]> {
+  const client = new pg.Client({ connectionString: url });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{ rel: string; bytes: string }>(
+      `SELECT c.oid::regclass::text AS rel, pg_relation_size(c.oid) AS bytes
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = $1 AND c.relkind::text = ANY($2)
+       UNION ALL
+       SELECT i.indexrelid::regclass::text, pg_relation_size(i.indexrelid)
+       FROM pg_index i
+       JOIN pg_class t ON t.oid = i.indrelid
+       JOIN pg_namespace n ON n.oid = t.relnamespace
+       WHERE n.nspname = $1 AND t.relkind::text = ANY($2) AND NOT i.indisprimary
+       ORDER BY 1`,
+      [schema, relkinds],
+    );
+    for (const r of rows) await client.query("SELECT pg_prewarm($1::regclass)", [r.rel]);
+    return rows.map((r) => ({ relation: r.rel, mb: Math.round((Number(r.bytes) / 2 ** 20) * 10) / 10 }));
+  } finally {
+    await client.end();
   }
 }
 

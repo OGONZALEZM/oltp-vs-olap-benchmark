@@ -25,12 +25,14 @@ export interface ConfigDef {
   sqlDir: "oltp" | "star" | "mv";
   searchPath?: "oltp" | "star";
   threads?: number;
+  /** Postgres only: relations loaded into shared_buffers with pg_prewarm before warm runs and plans. */
+  prewarm?: { schema: string; relkinds: Array<"r" | "m"> };
 }
 
 export const CONFIGS: ConfigDef[] = [
-  { id: "A", label: "A  Postgres OLTP (3NF)", engine: "postgres", sqlDir: "oltp", searchPath: "oltp" },
-  { id: "B", label: "B  Postgres star (fact table)", engine: "postgres", sqlDir: "star", searchPath: "star" },
-  { id: "B-MV", label: "B-MV Postgres materialized views", engine: "postgres", sqlDir: "mv", searchPath: "star" },
+  { id: "A", label: "A  Postgres OLTP (3NF)", engine: "postgres", sqlDir: "oltp", searchPath: "oltp", prewarm: { schema: "oltp", relkinds: ["r"] } },
+  { id: "B", label: "B  Postgres star (fact table)", engine: "postgres", sqlDir: "star", searchPath: "star", prewarm: { schema: "star", relkinds: ["r"] } },
+  { id: "B-MV", label: "B-MV Postgres materialized views", engine: "postgres", sqlDir: "mv", searchPath: "star", prewarm: { schema: "star", relkinds: ["m"] } },
   // Primary C row: 3 threads = Postgres's per-query budget (leader + max_parallel_workers_per_gather=2).
   { id: "C-3t", label: "C  DuckDB star, threads=3", engine: "duckdb", sqlDir: "star", threads: 3 },
   { id: "C-8t", label: "C  DuckDB star, threads=8 (default)", engine: "duckdb", sqlDir: "star", threads: 8 },

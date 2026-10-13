@@ -17,7 +17,8 @@ import { loadDotEnv } from "../ingest/config.js";
 import { PINNED_SETTINGS } from "../transform/build-postgres.js";
 import { ABS_TOLERANCE, compareResults, normalizeRows, type NormalizedResult } from "./compare.js";
 import { CONFIGS, QUERIES, loadQuerySql, quarterParams, type ConfigDef, type ConfigId } from "./queries.js";
-import { DuckSession, PgSession, restartPostgres, type Session } from "./sessions.js";
+import { existsSync } from "node:fs";
+import { DuckSession, PgSession, prewarm, restartPostgres, type PrewarmedRelation, type Session } from "./sessions.js";
 import { summarize, type Stats } from "./stats.js";
 import { dockerInfo, gitInfo, hostInfo } from "./system.js";
 
@@ -55,8 +56,18 @@ async function main(): Promise<void> {
   const key = (c: ConfigId, q: string) => `${c}:${q}`;
   for (const c of CONFIGS) for (const q of QUERIES) sqlText.set(key(c.id, q.id), await loadQuerySql(c, q, params));
 
+  // 0. Preflight: fail with a clear message instead of "relation does not exist".
+  const admin = await connect().catch((err: Error) => {
+    throw new Error(`Cannot connect to Postgres (${err.message}). Start it with: npm run db:up`);
+  });
+  const loaded = await scalar<string | null>(admin, "SELECT to_regclass('oltp.trips') IS NOT NULL AND to_regclass('star.fact_trips') IS NOT NULL");
+  if (!loaded || !existsSync(DUCKDB_PATH)) {
+    await admin.end();
+    throw new Error("Databases are not loaded. Run: npm run ingest:extract && npm run load");
+  }
+  await admin.query("CREATE EXTENSION IF NOT EXISTS pg_prewarm");
+
   // 1. Materialized views (B-MV) + metadata from Postgres.
-  const admin = await connect();
   const tMv = performance.now();
   await runSqlFile(admin, "sql/star/materialized_views.sql");
   const mvBuildMs = performance.now() - tMv;
@@ -109,9 +120,29 @@ async function main(): Promise<void> {
   }
   log(`verify: all ${QUERIES.length} queries match across ${CONFIGS.length} configs (abs tolerance ${ABS_TOLERANCE})`);
 
-  // 3. Warm runs.
+  // Client round-trip floor per engine (SELECT 1), to read sub-millisecond rows (B-MV) honestly.
+  const roundTripBaseline: Record<string, Stats> = {};
+  for (const [engine, c] of [["postgres", CONFIGS[0]!], ["duckdb", CONFIGS.find((c) => c.id === "C-3t")!]] as const) {
+    const s = await openSession(c);
+    try {
+      for (let i = 0; i < warmup; i++) await s.time("SELECT 1");
+      const samples: number[] = [];
+      for (let i = 0; i < runs; i++) samples.push((await s.time("SELECT 1")).ms);
+      roundTripBaseline[engine] = summarize(samples);
+    } finally {
+      await s.close();
+    }
+  }
+  log(`round-trip floor (SELECT 1): postgres ${roundTripBaseline.postgres!.medianMs.toFixed(2)} ms, duckdb ${roundTripBaseline.duckdb!.medianMs.toFixed(2)} ms`);
+
+  // 3. Warm runs. Postgres configs are pre-warmed into shared_buffers immediately before their runs.
   const warm = new Map<string, Stats>();
+  const prewarmed: Record<string, PrewarmedRelation[]> = {};
   for (const c of CONFIGS) {
+    if (c.prewarm) {
+      prewarmed[c.id] = await prewarm(databaseUrl(), c.prewarm.schema, c.prewarm.relkinds);
+      log(`prewarm ${c.id}: ${prewarmed[c.id]!.length} relations, ${prewarmed[c.id]!.reduce((s, r) => s + r.mb, 0).toFixed(0)} MB`);
+    }
     const s = await openSession(c);
     try {
       for (const q of QUERIES) {
@@ -149,16 +180,21 @@ async function main(): Promise<void> {
     }
   }
 
-  // 5. Plans, in a separate untimed pass, each after one untimed execution (warm state).
+  // 5. Plans, in a separate untimed pass, in the same warm state as the warm runs (pre-warmed,
+  // then one untimed execution).
   await mkdir("results/plans", { recursive: true });
   for (const c of CONFIGS) {
+    if (c.prewarm) await prewarm(databaseUrl(), c.prewarm.schema, c.prewarm.relkinds);
     const s = await openSession(c);
     try {
       for (const q of QUERIES) {
         const sql = sqlText.get(key(c.id, q.id))!;
         await s.time(sql);
         const plan = await s.explain(sql);
-        await writeFile(`results/plans/${q.id}_${c.id}.txt`, `-- ${c.label}\n-- ${q.title}\n${sql}\n\n${plan}\n`);
+        const note = c.engine === "postgres"
+          ? "-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF): shape, row counts and buffers only.\n-- Plan times are not benchmark results; see results/benchmark.json.\n"
+          : "-- DuckDB EXPLAIN ANALYZE: operator timings include profiling overhead; not benchmark results.\n";
+        await writeFile(`results/plans/${q.id}_${c.id}.txt`, `-- ${c.label}\n-- ${q.title}\n${note}${sql}\n\n${plan}\n`);
       }
     } finally {
       await s.close();
@@ -182,7 +218,7 @@ async function main(): Promise<void> {
     ["A→B (model)", "A", "B"],
     ["B→C (engine, 3 threads)", "B", "C-3t"],
     ["B→C (engine, 8 threads)", "B", "C-8t"],
-    ["B→B-MV (pre-aggregation)", "B", "B-MV"],
+    ["B→B-MV (pre-agg, round-trip bound)", "B", "B-MV"],
   ];
   const speedups: Record<string, { warm: Record<string, number | null>; cold: Record<string, number | null> }> = {};
   for (const q of QUERIES) {
@@ -213,14 +249,17 @@ async function main(): Promise<void> {
       method: {
         timing: "Wall clock around one query call, after the connection is open: send, execute, receive the (small) result. Postgres timings include a loopback round trip into the Docker VM; DuckDB is in-process.",
         statistics: "median and nearest-rank p95 of the timed runs",
-        warm: `${warmup} untimed warm-up run(s), then ${runs} timed runs on the same connection`,
+        warm: `${warmup} untimed warm-up run(s), then ${runs} timed runs on the same connection. Immediately before each Postgres config's warm runs, its tables and secondary indexes are loaded into shared_buffers with pg_prewarm, one relation at a time (primary-key indexes excluded: unused and too large to fit alongside). This is Postgres's best case, so the reported engine gap is conservative.`,
         cold: "Restart cold: the Postgres container is restarted before every timed cold run (empties shared_buffers and backend caches) and a new connection is opened; DuckDB gets a fresh read-only instance (empty buffer pool). The OrbStack VM's OS page cache survives container restarts, so table files may still be in memory: this is not a true cold cache.",
-        plans: "Captured in a separate, untimed pass after one untimed execution: EXPLAIN (ANALYZE, BUFFERS, SETTINGS) for Postgres, EXPLAIN ANALYZE for DuckDB.",
+        plans: "Captured in a separate, untimed pass in the warm state (pre-warmed, then one untimed execution): EXPLAIN (ANALYZE, BUFFERS, SETTINGS, TIMING OFF) for Postgres, EXPLAIN ANALYZE for DuckDB. Plans document shape, row counts and buffers; their times are not results.",
+        roundTrip: "SELECT 1 timed like a query, per engine. Rows whose median is close to this floor (B-MV) are bounded by client round trip and parse/plan time, not by query work.",
         verification: `Before timing, every query's result in every config is compared with config A; numbers within absolute tolerance ${ABS_TOLERANCE}, text exactly. q3 rows are compared after sorting by (payment_type, company) because text collation differs between engines.`,
         materializedViews: "B-MV reads pre-aggregated materialized views. Their build cost is reported separately and is not part of any query timing.",
       },
     },
     materializedViewBuildMs: mvBuildMs,
+    roundTripBaselineMs: roundTripBaseline,
+    prewarmed,
     verification,
     configs: CONFIGS.map(({ id, label, engine, threads }) => ({ id, label, engine, threads: threads ?? null })),
     queries: QUERIES.map(({ id, title }) => ({ id, title })),
@@ -251,6 +290,7 @@ async function main(): Promise<void> {
     console.log(`  ${q.id.padEnd(6)}${cells.join("")}`);
   }
   console.log(`\nB-MV build time (not in any timing): ${(mvBuildMs / 1000).toFixed(1)}s`);
+  console.log(`Round-trip floor (SELECT 1 median): postgres ${roundTripBaseline.postgres!.medianMs.toFixed(2)} ms, duckdb ${roundTripBaseline.duckdb!.medianMs.toFixed(2)} ms`);
   console.log("Results: results/benchmark.json, plans: results/plans/");
 }
 
