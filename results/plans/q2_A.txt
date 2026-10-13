@@ -56,5 +56,5 @@ Limit  (cost=87235.51..87235.54 rows=10 width=86) (actual rows=10 loops=1)
 Settings: work_mem = '64MB', jit = 'off', search_path = 'oltp'
 Planning:
   Buffers: shared hit=7
-Planning Time: 0.226 ms
-Execution Time: 362.219 ms
+Planning Time: 0.179 ms
+Execution Time: 387.312 ms

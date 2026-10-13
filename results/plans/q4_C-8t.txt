@@ -142,7 +142,7 @@ EXPLAIN ANALYZE -- Q4: day-of-week x hour matrix: trip volume and average durati
 │                           │                                           │
 │                           │                                           │
 │       3,304,881 rows      │                                           │
-│           0.00s           │                                           │
+│           0.01s           │                                           │
 └─────────────┬─────────────┘                                           │
 ┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
 │         HASH_JOIN         │                             │         TABLE_SCAN        │

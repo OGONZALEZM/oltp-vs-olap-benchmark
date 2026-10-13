@@ -15,5 +15,5 @@ Sort  (cost=1.17..1.18 rows=6 width=53) (actual rows=6 loops=1)
   ->  Seq Scan on mv_monthly  (cost=0.00..1.09 rows=6 width=53) (actual rows=6 loops=1)
         Buffers: shared hit=1
 Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
-Planning Time: 0.070 ms
-Execution Time: 0.024 ms
+Planning Time: 0.015 ms
+Execution Time: 0.014 ms

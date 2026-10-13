@@ -59,8 +59,8 @@ Limit  (cost=85091.62..85091.65 rows=10 width=88) (actual rows=10 loops=1)
 Settings: work_mem = '64MB', search_path = 'star', jit_above_cost = '0'
 Planning:
   Buffers: shared hit=7
-Planning Time: 0.196 ms
+Planning Time: 0.162 ms
 JIT:
   Functions: 55
   Options: Inlining false, Optimization false, Expressions true, Deforming true
-Execution Time: 395.631 ms
+Execution Time: 392.954 ms

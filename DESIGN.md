@@ -106,10 +106,16 @@ recorded in `results/benchmark.json`, together with versions, row counts, the ho
   execute, receive a small result and turn it into JS row objects; the same scope for both
   engines). Both include parse and plan time. Postgres timings include a
   loopback round trip into the VM; DuckDB runs in-process. The floor is measured with `SELECT 1`
-  timed the same way (median 0.23 ms Postgres, 0.16 ms DuckDB) and recorded in
-  `results/benchmark.json`. B-MV warm medians (0.2–0.5 ms) sit at that floor, so **B→B-MV ratios are
-  bounded by client round trip** and say "pre-aggregation removes essentially all query work",
-  not a precise factor.
+  timed the same way (median 0.20 ms Postgres, 0.18 ms DuckDB) and recorded in
+  `results/benchmark.json`. B-MV warm medians (1.0–1.2 ms) are within about 1 ms of that
+  floor, so **B→B-MV ratios are bounded by client round trip and noise** and say
+  "pre-aggregation removes essentially all query work", not a precise factor.
+  *Residual noise, documented and not tuned:* B-MV warm medians were 0.2–0.5 ms in the run with
+  no pauses and 1.0–1.2 ms in the final run, with medians up to 27% above their minimums. The
+  floor itself is measured back to back before the warm blocks, without a pause. A likely
+  explanation is that sub-millisecond queries never keep the CPU busy, so the warm-up after the
+  10 s pause does not keep it at full clock, but this was not isolated. It moves B-MV by under
+  1 ms and does not affect A, B or C.
 - **B→C is engine plus platform.** Postgres runs inside the OrbStack Linux VM (8 vCPU, 7.8 GiB);
   DuckDB runs natively on the macOS host (Apple M3, 4 performance + 4 efficiency cores). The
   B→C ratio therefore also contains VM-vs-native execution and scheduling differences. VM
@@ -143,32 +149,32 @@ are pre-warmed; restart runs start from an empty buffer pool. p95 and every samp
 
 | Query | A 3NF | B star | B-MV | C 3 threads | C 8 threads | A→B | B→C (3t) | B→C (8t) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| q1 Trips, revenue and average fare per month | 584.5 (633.0 / 567.4) | 403.5 (364.9 / 357.7) | 0.2 (1.2 / 0.2) | 18.9 (20.2 / 17.4) | 7.9 (10.9 / 7.8) | 1.4x (1.7x) | 21x (18x) | 51x (33x) |
-| q2 Top 10 pickup areas by revenue (known areas) | 393.6 (347.2 / 335.8) | 437.5 (350.1 / 340.3) | 0.2 (1.4 / 0.2) | 35.9 (37.4 / 35.6) | 22.0 (20.3 / 18.2) | 0.9x (1.0x) | 12x (9.4x) | 20x (17x) |
-| q3 Average tip by payment type and company, one quarter | 340.7 (357.9 / 301.5) | 363.1 (361.8 / 352.8) | 0.5 (1.9 / 0.4) | 18.8 (20.3 / 18.4) | 16.8 (12.3 / 13.1) | 0.9x (1.0x) | 19x (18x) | 22x (29x) |
-| q4 Day-of-week x hour: trips and average duration | 586.8 (478.7 / 477.3) | 365.0 (347.1 / 331.2) | 0.5 (1.7 / 0.4) | 16.4 (18.8 / 16.2) | 9.7 (11.6 / 9.4) | 1.6x (1.4x) | 22x (18x) | 38x (30x) |
+| q1 Trips, revenue and average fare per month | 596.0 (599.5 / 588.9) | 361.7 (360.4 / 354.4) | 1.0 (1.3 / 0.8) | 17.9 (20.0 / 16.9) | 8.2 (9.8 / 7.8) | 1.6x (1.7x) | 20x (18x) | 44x (37x) |
+| q2 Top 10 pickup areas by revenue (known areas) | 340.0 (358.3 / 337.5) | 342.8 (350.3 / 334.6) | 1.0 (1.4 / 0.9) | 35.6 (37.3 / 35.3) | 18.3 (20.0 / 17.3) | 1.0x (1.0x) | 9.6x (9.4x) | 19x (18x) |
+| q3 Average tip by payment type and company, one quarter | 307.1 (352.3 / 305.0) | 352.4 (367.2 / 349.8) | 1.2 (1.7 / 0.9) | 19.4 (20.9 / 19.2) | 10.6 (13.5 / 10.4) | 0.9x (1.0x) | 18x (18x) | 33x (27x) |
+| q4 Day-of-week x hour: trips and average duration | 480.0 (482.3 / 467.6) | 345.9 (343.3 / 333.2) | 1.1 (1.5 / 0.9) | 16.4 (18.7 / 16.3) | 8.0 (9.9 / 7.9) | 1.4x (1.4x) | 21x (18x) | 43x (35x) |
 
 Spread of the warm runs, min / median / p95 in ms (10 runs; p95 is the slowest run).
-Warm medians sit up to 23% (A), 29% (B), 9% (C-3t) and 28% (C-8t)
-above their minimums; the largest p95/median ratio is 2.0x.
+Warm medians sit up to 3% (A), 4% (B), 6% (C-3t) and 5% (C-8t)
+above their minimums; the largest p95/median ratio is 1.3x.
 
 | Query | A 3NF | B star | C 3 threads | C 8 threads |
 |---|---:|---:|---:|---:|
-| q1 | 567.4 / 584.5 / 747.2 | 357.7 / 403.5 / 818.1 | 17.4 / 18.9 / 23.9 | 7.8 / 7.9 / 8.5 |
-| q2 | 335.8 / 393.6 / 535.8 | 340.3 / 437.5 / 558.4 | 35.6 / 35.9 / 39.2 | 18.2 / 22.0 / 27.8 |
-| q3 | 301.5 / 340.7 / 470.2 | 352.8 / 363.1 / 505.4 | 18.4 / 18.8 / 20.0 | 13.1 / 16.8 / 19.3 |
-| q4 | 477.3 / 586.8 / 876.3 | 331.2 / 365.0 / 562.2 | 16.2 / 16.4 / 16.6 | 9.4 / 9.7 / 10.8 |
+| q1 | 588.9 / 596.0 / 618.3 | 354.4 / 361.7 / 412.2 | 16.9 / 17.9 / 19.7 | 7.8 / 8.2 / 10.2 |
+| q2 | 337.5 / 340.0 / 392.1 | 334.6 / 342.8 / 401.3 | 35.3 / 35.6 / 36.2 | 17.3 / 18.3 / 23.0 |
+| q3 | 305.0 / 307.1 / 341.3 | 349.8 / 352.4 / 397.0 | 19.2 / 19.4 / 19.9 | 10.4 / 10.6 / 11.0 |
+| q4 | 467.6 / 480.0 / 548.9 | 333.2 / 345.9 / 387.2 | 16.3 / 16.4 / 16.9 | 7.9 / 8.0 / 9.4 |
 
 ### The model alone barely helps in Postgres (A→B 0.9–1.6x warm, 1.0–1.7x restart)
 
 Both A and B scan the full 3.3M-row table in a row store; a star schema does not change how many
 bytes Postgres reads per row. What changes is per-row work, and it cuts both ways:
 
-- **q1, q4: B wins (1.4x and 1.6x warm, 1.7x and 1.4x restart).**
+- **q1, q4: B wins (1.6x and 1.4x warm, 1.7x and 1.4x restart).**
   A computes `EXTRACT(year/month/isodow/hour ...)` from the timestamp on every row
   (`Group Key: ((EXTRACT(year FROM trip_start_timestamp))::integer), ...`);
   B joins small precomputed dimensions and groups by their columns (`Group Key: d.year, d.month`).
-- **q2: roughly even (0.9x warm, 1.0x restart).**
+- **q2: roughly even (1.0x warm, 1.0x restart).**
   Both now group by a primary key (`Group Key: ca.community_area_id` in A,
   `Group Key: a.area_key` in B). The first version of B grouped by
   `a.community_area_id, a.area_name`, hashing a text column on every row, because
@@ -190,14 +196,14 @@ bytes Postgres reads per row. What changes is per-row work, and it cuts both way
   date dimension), and because DuckDB derives it on its own: its plan shows a dynamic filter
   pushed into the fact scan (`Dynamic Filters: optional: date_key>=20250401 AND optional:
   date_key<=20250630`).
-  A touches fewer buffers (37,424 vs 53,194 shared hits), but the difference does not show up
+  A touches fewer buffers (37,423 vs 53,194 shared hits), but the difference does not show up
   as a robust time difference between the two configs.
 
-### The engine is where the gap is (B→C 12–22x warm, 9.4–18x restart, at equal thread budget)
+### The engine is where the gap is (B→C 9.6–21x warm, 9.4–18x restart, at equal thread budget)
 
 Same star schema, same SQL text, same rows, same physical order, and DuckDB limited to Postgres's
-per-query budget of 3 threads: DuckDB is 12–22x faster on warm medians and 9.4–18x on restart
-medians; 20–51x and 17–33x with its default 8 threads. A
+per-query budget of 3 threads: DuckDB is 9.6–21x faster on warm medians and 9.4–18x on restart
+medians; 19–44x and 18–37x with its default 8 threads. A
 columnar engine reads only the columns a query touches (a handful of 2–8 byte columns instead of
 ~130-byte rows), runs vectorized aggregation over them, and pushes join filters into scans.
 Postgres was pre-warmed, which is the best case for Postgres's buffer cache; native vs VM is not
@@ -205,27 +211,27 @@ controlled, and JIT is bounded by a sensitivity row (next section). VM overhead 
 measured gap larger than the pure engine gap by an unmeasured amount: the number is engine plus
 platform, not a conservative lower bound.
 
-### JIT does not explain the gap (B-jit 0.9–1.2x of B)
+### JIT does not explain the gap (B-jit 0.9x of B)
 
 B timed warm with JIT forced on (`jit = on, jit_above_cost = 0`); every captured plan contains a
 JIT section. Warm medians in ms (min / p95 for B-jit):
 
 | Query | B (jit=off) | B-jit | B-jit min / p95 | B→B-jit | JIT in plan |
 |---|---:|---:|---:|---:|---|
-| q1 | 403.5 | 419.9 | 405.0 / 493.6 | 1.0x | yes |
-| q2 | 437.5 | 365.0 | 355.8 / 452.4 | 1.2x | yes |
-| q3 | 363.1 | 405.5 | 379.3 / 493.1 | 0.9x | yes |
-| q4 | 365.0 | 408.2 | 378.5 / 446.8 | 0.9x | yes |
+| q1 | 361.7 | 420.5 | 399.8 / 447.9 | 0.9x | yes |
+| q2 | 342.8 | 378.0 | 360.0 / 415.2 | 0.9x | yes |
+| q3 | 352.4 | 381.0 | 376.0 / 436.9 | 0.9x | yes |
+| q4 | 345.9 | 387.9 | 375.9 / 429.6 | 0.9x | yes |
 
-B-jit runs at 0.9–1.2x of B's warm median (above 1x means faster with JIT); B's own warm
-medians sit up to 29% above their minimums. At default thresholds JIT would not engage on B at all. The row bounds JIT for
+B-jit runs at 0.9x of B's warm median (above 1x means faster with JIT); B's own warm
+medians sit up to 4% above their minimums. At default thresholds JIT would not engage on B at all. The row bounds JIT for
 B only; A is not covered (see the method section).
 
 ### Pre-aggregation removes the work entirely (B-MV)
 
-The materialized views hold the answers at the questions' grain (built in ~2.3 s), so each query
-reads a few hundred rows at most and its time is the client round trip (B-MV warm medians 0.2–0.5 ms
-vs a 0.23 ms `SELECT 1` floor). This is a different trade-off (freshness and maintenance for
+The materialized views hold the answers at the questions' grain (built in ~1.9 s), so each query
+reads a few hundred rows at most and its time is close to the client round trip (B-MV warm
+medians 1.0–1.2 ms vs a 0.20 ms `SELECT 1` floor; see the residual-noise note in the method). This is a different trade-off (freshness and maintenance for
 speed) and is reported as its own row, never as the same work as querying the fact table.
 
 ## What I left out and why

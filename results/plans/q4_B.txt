@@ -53,5 +53,5 @@ Finalize GroupAggregate  (cost=89140.61..89185.27 rows=168 width=44) (actual row
 Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
 Planning:
   Buffers: shared hit=16
-Planning Time: 0.223 ms
-Execution Time: 414.885 ms
+Planning Time: 0.211 ms
+Execution Time: 371.057 ms

@@ -18,5 +18,5 @@ Sort  (cost=12.61..12.95 rows=137 width=68) (actual rows=137 loops=1)
         Rows Removed by Filter: 134
         Buffers: shared hit=3
 Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
-Planning Time: 0.111 ms
-Execution Time: 0.130 ms
+Planning Time: 0.017 ms
+Execution Time: 0.076 ms

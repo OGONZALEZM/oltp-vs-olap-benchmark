@@ -19,17 +19,17 @@ ORDER BY 1, 2;
 Finalize GroupAggregate  (cost=83473.16..83541.42 rows=252 width=69) (actual rows=137 loops=1)
   Group Key: p.payment_type, c.company_name
   Buffers: shared hit=53194
-  ->  Gather Merge  (cost=83473.16..83531.97 rows=504 width=69) (actual rows=398 loops=1)
+  ->  Gather Merge  (cost=83473.16..83531.97 rows=504 width=69) (actual rows=397 loops=1)
         Workers Planned: 2
         Workers Launched: 2
         Buffers: shared hit=53194
-        ->  Sort  (cost=82473.14..82473.77 rows=252 width=69) (actual rows=133 loops=3)
+        ->  Sort  (cost=82473.14..82473.77 rows=252 width=69) (actual rows=132 loops=3)
               Sort Key: p.payment_type, c.company_name
               Sort Method: quicksort  Memory: 42kB
               Buffers: shared hit=53194
               Worker 0:  Sort Method: quicksort  Memory: 42kB
               Worker 1:  Sort Method: quicksort  Memory: 42kB
-              ->  Partial HashAggregate  (cost=82459.94..82463.09 rows=252 width=69) (actual rows=133 loops=3)
+              ->  Partial HashAggregate  (cost=82459.94..82463.09 rows=252 width=69) (actual rows=132 loops=3)
                     Group Key: p.payment_type, c.company_name
                     Batches: 1  Memory Usage: 93kB
                     Buffers: shared hit=53178
@@ -66,5 +66,5 @@ Finalize GroupAggregate  (cost=83473.16..83541.42 rows=252 width=69) (actual row
 Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
 Planning:
   Buffers: shared hit=20
-Planning Time: 0.312 ms
-Execution Time: 455.854 ms
+Planning Time: 0.321 ms
+Execution Time: 387.920 ms
