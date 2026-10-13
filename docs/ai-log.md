@@ -103,3 +103,14 @@ Live log. One entry every time the AI generates something that had to be correct
      baseline recorded, DESIGN notes.
 - **How it was caught:** benchmark-reviewer subagent reading `results/plans/` and catalog sizes.
 - **Fix:** commits aee7472 (code) and the following docs commit; results re-run from a clean tree.
+
+### 10:00 CLAUDE.md moved to the repository root
+- **What was wrong:** the project context lived in `docs/CLAUDE.md`. Claude Code only loads
+  `CLAUDE.md` automatically from the repository root (and parent directories), so sessions did not
+  get it at start: it had to be read explicitly, and every subagent prompt had to point at
+  `docs/CLAUDE.md` by hand.
+- **How it was caught:** while preparing the prompt for the fresh-session benchmark review, which
+  needed the non-standard path spelled out.
+- **Fix:** `git mv docs/CLAUDE.md CLAUDE.md`; benchmark-reviewer now points at the root file;
+  README layout lists `CLAUDE.md`, `docs/ai-log.md` and the reviewer agent. Historical log entries
+  above keep the name as written at the time.

@@ -110,4 +110,7 @@ src/transform/ Postgres and DuckDB builds
 src/bench/     verification, timing, plans, report
 tests/         unit and integration (Testcontainers) tests
 results/       benchmark.json and plans/ from the last run
+CLAUDE.md      project context for Claude Code (loaded automatically at session start)
+docs/ai-log.md log of AI-generated work that was corrected, and how it was caught
+.claude/agents/benchmark-reviewer.md  read-only reviewer subagent for benchmark fairness
 ```
