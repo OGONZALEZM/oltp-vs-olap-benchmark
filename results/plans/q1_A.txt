@@ -35,5 +35,5 @@ Finalize GroupAggregate  (cost=105610.82..109295.59 rows=12561 width=80) (actual
                     ->  Parallel Seq Scan on trips  (cost=0.00..86228.28 rows=1377064 width=20) (actual rows=1101627 loops=3)
                           Buffers: shared hit=58687
 Settings: work_mem = '64MB', jit = 'off', search_path = 'oltp'
-Planning Time: 0.091 ms
-Execution Time: 628.465 ms
+Planning Time: 0.088 ms
+Execution Time: 600.582 ms

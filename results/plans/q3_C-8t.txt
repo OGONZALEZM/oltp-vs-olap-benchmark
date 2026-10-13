@@ -23,7 +23,7 @@ ORDER BY 1, 2;
 EXPLAIN ANALYZE -- Q3: average tip by payment type and company, for one quarter. SELECT p.payment_type,        c.company_name AS company,        count(*)       AS trips,        avg(f.tips)    AS avg_tip FROM fact_trips f JOIN dim_date d    ON d.date_key = f.date_key JOIN dim_payment p ON p.payment_key = f.payment_key JOIN dim_company c ON c.company_key = f.company_key WHERE d.year = 2025 AND d.quarter = 2 GROUP BY p.payment_type, c.company_name ORDER BY 1, 2; 
 ┌────────────────────────────────────────────────┐
 │┌──────────────────────────────────────────────┐│
-││              Total Time: 0.0119s             ││
+││              Total Time: 0.0128s             ││
 │└──────────────────────────────────────────────┘│
 └────────────────────────────────────────────────┘
 ┌───────────────────────────┐
@@ -205,6 +205,6 @@ EXPLAIN ANALYZE -- Q3: average tip by payment type and company, for one quarter.
 │                           ││                           │
 │                           ││                           │
 │       1,871,257 rows      ││          91 rows          │
-│           0.01s           ││          (0.00s)          │
+│           0.00s           ││          (0.00s)          │
 └───────────────────────────┘└───────────────────────────┘
 

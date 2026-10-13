@@ -18,13 +18,14 @@ Warm median per query in ms, 10 runs. The full results (min, median and p95; res
 
 | Query | A 3NF | B star | B-MV | C (3 threads) | C (8 threads) |
 |---|---:|---:|---:|---:|---:|
-| q1 Trips, revenue and average fare per month | 607.1 | 393.9 | 0.3 | 17.7 | 10.1 |
-| q2 Top 10 pickup areas by revenue (known areas) | 345.6 | 375.2 | 0.3 | 37.2 | 18.0 |
-| q3 Average tip by payment type and company, one quarter | 308.6 | 358.8 | 0.6 | 18.3 | 10.9 |
-| q4 Day-of-week x hour: trips and average duration | 505.4 | 382.7 | 0.5 | 16.4 | 10.4 |
+| q1 Trips, revenue and average fare per month | 584.5 | 403.5 | 0.2 | 18.9 | 7.9 |
+| q2 Top 10 pickup areas by revenue (known areas) | 393.6 | 437.5 | 0.2 | 35.9 | 22.0 |
+| q3 Average tip by payment type and company, one quarter | 340.7 | 363.1 | 0.5 | 18.8 | 16.8 |
+| q4 Day-of-week x hour: trips and average duration | 586.8 | 365.0 | 0.5 | 16.4 | 9.7 |
 
-- **The model alone (A→B) gives 0.9–1.5x in Postgres.** A star schema does not change how a row store reads data.
-- **The engine (B→C) gives 10–23x at the same 3-thread budget, and 21–39x with DuckDB's default 8 threads.** Caveat: Postgres runs inside the OrbStack Linux VM and DuckDB natively on the host, so B→C is engine plus platform. Postgres is pre-warmed into its buffer cache: this is the best case for Postgres's buffer cache; native vs VM and JIT are not controlled.
+- **The model alone (A→B) gives 0.9–1.6x in Postgres.** A star schema does not change how a row store reads data.
+- **The engine (B→C) gives 12–22x at the same 3-thread budget, and 20–51x with DuckDB's default 8 threads.** Caveat: Postgres runs inside the OrbStack Linux VM and DuckDB natively on the host, so B→C is engine plus platform. Postgres is pre-warmed into its buffer cache: this is the best case for Postgres's buffer cache; native vs VM is not controlled, and JIT is bounded by a sensitivity row.
+- **Forcing JIT on for B moves it 0.9–1.2x**, within run-to-run noise, so the pinned `jit=off` does not explain the engine gap.
 - **Materialized views (B-MV) remove the query work entirely.** Their times sit at the client round-trip floor, and they are reported as their own row.
 
 

@@ -26,7 +26,7 @@ LIMIT 10;
 EXPLAIN ANALYZE -- Q2: top 10 pickup community areas by revenue, with average ticket, excluding unknown areas. SELECT a.community_area_id,        a.area_name,        count(*)          AS trips,        sum(f.trip_total) AS revenue,        avg(f.trip_total) AS avg_ticket FROM fact_trips f JOIN dim_area a ON a.area_key = f.pickup_area_key WHERE f.pickup_area_key <> 0                      -- exclude unknown areas -- area_key is dim_area's primary key: Postgres drops the dependent columns from the group key -- (same as A, which groups by community_areas' primary key). DuckDB has no functional-dependency -- grouping, so the dependent columns must be listed for the shared SQL to run on C. GROUP BY a.area_key, a.community_area_id, a.area_name ORDER BY revenue DESC, a.community_area_id LIMIT 10; 
 ┌────────────────────────────────────────────────┐
 │┌──────────────────────────────────────────────┐│
-││              Total Time: 0.0515s             ││
+││              Total Time: 0.0368s             ││
 │└──────────────────────────────────────────────┘│
 └────────────────────────────────────────────────┘
 ┌───────────────────────────┐
@@ -100,7 +100,7 @@ EXPLAIN ANALYZE -- Q2: top 10 pickup community areas by revenue, with average ti
 │                           │
 │                           │
 │          77 rows          │
-│           0.11s           │
+│           0.08s           │
 └─────────────┬─────────────┘
 ┌─────────────┴─────────────┐
 │         PROJECTION        │
@@ -129,7 +129,7 @@ EXPLAIN ANALYZE -- Q2: top 10 pickup community areas by revenue, with average ti
 │                           │
 │                           │
 │       3,212,829 rows      │
-│           0.01s           │
+│           0.00s           │
 └─────────────┬─────────────┘
 ┌─────────────┴─────────────┐
 │         HASH_JOIN         │

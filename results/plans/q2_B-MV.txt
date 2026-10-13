@@ -21,5 +21,5 @@ Limit  (cost=4.02..4.05 rows=10 width=62) (actual rows=10 loops=1)
               Rows Removed by Filter: 1
               Buffers: shared hit=1
 Settings: work_mem = '64MB', jit = 'off', search_path = 'star'
-Planning Time: 0.013 ms
-Execution Time: 0.041 ms
+Planning Time: 0.041 ms
+Execution Time: 0.103 ms

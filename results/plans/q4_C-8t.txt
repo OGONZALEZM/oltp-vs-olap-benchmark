@@ -20,7 +20,7 @@ ORDER BY d.iso_dow, t.hour;
 EXPLAIN ANALYZE -- Q4: day-of-week x hour matrix: trip volume and average duration (trip_seconds). SELECT d.iso_dow, t.hour,        count(*)            AS trips,        avg(f.trip_seconds) AS avg_seconds FROM fact_trips f JOIN dim_date d ON d.date_key = f.date_key JOIN dim_time t ON t.time_key = f.time_key GROUP BY d.iso_dow, t.hour ORDER BY d.iso_dow, t.hour; 
 ┌────────────────────────────────────────────────┐
 │┌──────────────────────────────────────────────┐│
-││              Total Time: 0.0107s             ││
+││              Total Time: 0.0088s             ││
 │└──────────────────────────────────────────────┘│
 └────────────────────────────────────────────────┘
 ┌───────────────────────────┐
@@ -129,7 +129,7 @@ EXPLAIN ANALYZE -- Q4: day-of-week x hour matrix: trip volume and average durati
 │                           │
 │                           │
 │       3,304,881 rows      │
-│           0.01s           │
+│           0.00s           │
 └─────────────┬─────────────┘
 ┌─────────────┴─────────────┐
 │         HASH_JOIN         │
@@ -142,7 +142,7 @@ EXPLAIN ANALYZE -- Q4: day-of-week x hour matrix: trip volume and average durati
 │                           │                                           │
 │                           │                                           │
 │       3,304,881 rows      │                                           │
-│           0.01s           │                                           │
+│           0.00s           │                                           │
 └─────────────┬─────────────┘                                           │
 ┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
 │         HASH_JOIN         │                             │         TABLE_SCAN        │
@@ -184,6 +184,6 @@ EXPLAIN ANALYZE -- Q4: day-of-week x hour matrix: trip volume and average durati
 │                           ││                           │
 │                           ││                           │
 │       3,304,881 rows      ││          181 rows         │
-│           0.01s           ││          (0.00s)          │
+│           0.00s           ││          (0.00s)          │
 └───────────────────────────┘└───────────────────────────┘
 
