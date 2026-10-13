@@ -227,3 +227,47 @@ The stack decision predates the repository and uses the first commit's time.
   - Final clean run follows.
 - **Lesson:** a "best case" label needs evidence from the data. Here the supposedly worse series
   (restart) was the faster and tighter one.
+
+### 07:30 The cooldown fix introduced a bias against short queries
+- **Prompt / context:** after review #3's thermal finding, the AI added a 2 s pause before every
+  timed run (b7a2c1b) and ran the benchmark from a clean commit (af3ab95), intended as final.
+- **What was wrong:** the pause fixed Postgres's drift but added the CPU's wake-up cost to every
+  sample, which only matters for short queries. Comparing the run with the previous one (warm
+  medians):
+
+  | | Previous run, 8c320e1 (no cooldown) | af3ab95 run (2 s pause before each timed run) |
+  |---|---|---|
+  | Postgres A/B medians vs their minimums | up to +29% | up to +6% (thermal drift fixed) |
+  | Postgres warm > restart medians | 6 of 8 cells | 2 of 8 cells |
+  | B-MV q1 | 0.2 ms | 2.5 ms |
+  | C-3t q1 | 18.9 ms | 25.6 ms |
+  | B→C, 3 threads | 12–22x | 7.7–15x |
+
+- **How it was caught:** the AI compared the run with the previous one before committing.
+  The fast configs had slowed down although nothing about them had changed. To check the cause,
+  it timed the same query 10 times per condition on one open connection:
+
+  | | No pause | 2 s pause before each run | No pause again |
+  |---|---|---|---|
+  | DuckDB q1 (3 threads) | 18.0 ms | 25.4 ms | 17.7 ms |
+  | B-MV q1 | 0.5 ms | 2.4 ms | 1.1 ms |
+
+  That is a roughly fixed 2–7 ms per sample: noise on a 350 ms Postgres query, about 40% of a
+  DuckDB query. As committed, the af3ab95 results would have understated B→C by about a third.
+  They were discarded and never committed.
+- **Fix (2f9ac50):** a 10 s pause before each (query, config) warm block instead of before each
+  run. The untimed warm-up then wakes the CPU, and the 10 timed runs are back to back. Restart
+  runs get no extra pause. Idle check with this pattern: DuckDB q1 17.7–18.4 ms, Postgres B q1
+  median 1–4% above its minimum.
+- **Each methodology change was driven by a demonstrated cause, not by the results:**
+  - Pre-warming came from plans showing `read=` buffers (review #1).
+  - The cooldown came from warm medians above restart medians plus drifting samples (review #3).
+  - The move to per-block pauses came from the timing table above, which isolates the wake-up
+    cost with nothing else changed.
+  - None of the changes was chosen because it moved B→C in a preferred direction: the first
+    cooldown shrank the gap, and was rejected only once its cause was shown to be a measurement
+    artifact.
+- **Stopping rule (set by Oscar before the next run):** the idle check passed, so the next full
+  run is final whatever it shows. Remaining noise gets documented, not tuned. The headline
+  statistic stays as decided before the run: warm median, with restart median and warm min beside
+  it.
