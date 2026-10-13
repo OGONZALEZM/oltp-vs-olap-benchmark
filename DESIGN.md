@@ -92,7 +92,6 @@ The deadline was one day; none of these would change the direction of the result
 - **An orchestrator** (Airflow, Dagster): three idempotent npm scripts are enough for a one-shot
   benchmark.
 - **Cloud deployment:** local runs keep it reproducible on one machine.
-- **The UI:** the README tables, console summary and `results/benchmark.json` carry the results.
 
 ## What I would change with 10x the data
 

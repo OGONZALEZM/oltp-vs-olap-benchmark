@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OLTP vs OLAP Results</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --ring: rgba(11, 11, 11, 0.10);
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-5: #e87ba4;
+    --note-bg: #fff6e0;
+    --note-ink: #5c4300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #f0efec;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --ring: rgba(255, 255, 255, 0.10);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --note-bg: #2e2510;
+      --note-ink: #f2d48a;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --ring: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --note-bg: #2e2510;
+    --note-ink: #f2d48a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 32px 0 4px; }
+  p.sub, .meta { color: var(--ink-2); margin: 0 0 12px; }
+  .meta { font-size: 13px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--ring);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .tile .k { color: var(--ink-2); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .tile .v { font-size: 34px; font-weight: 650; font-variant-numeric: tabular-nums; margin: 4px 0 0; }
+  .tile .r { color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .tile .n { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  .tile .badge {
+    display: inline-block; margin-top: 8px; padding: 2px 8px; border-radius: 999px;
+    background: var(--note-bg); color: var(--note-ink); font-size: 12px; font-weight: 600;
+  }
+  .chart-wrap { position: relative; height: 380px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; white-space: normal; }
+  th { color: var(--ink-2); font-weight: 600; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .scroll { overflow-x: auto; }
+  details summary { cursor: pointer; color: var(--ink-2); margin-top: 12px; font-size: 13px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 12px; }
+  label { display: grid; gap: 4px; font-size: 13px; color: var(--ink-2); }
+  select {
+    font: inherit; color: var(--ink); background: var(--page);
+    border: 1px solid var(--axis); border-radius: 6px; padding: 6px 8px; min-width: 200px;
+  }
+  .disclaimer {
+    background: var(--note-bg); color: var(--note-ink); border-radius: 8px;
+    padding: 8px 12px; font-size: 13px; margin-bottom: 12px;
+  }
+  pre {
+    margin: 0; padding: 12px; background: var(--page); border: 1px solid var(--grid);
+    border-radius: 8px; overflow: auto; max-height: 560px; font-size: 12px; line-height: 1.45;
+  }
+  .error { color: #d03b3b; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>OLTP vs OLAP on Chicago taxi data</h1>
+  <p class="sub">The same four questions over 3.3M real trips: Postgres 3NF (A), Postgres star (B, plus materialized views B-MV) and DuckDB star (C).</p>
+  <p class="meta" id="meta">Loading results/benchmark.json…</p>
+
+  <h2>1. Three effects</h2>
+  <p class="sub">Range across the four queries, ratio of warm medians (> 1x means the second config is faster). Restart medians in brackets.</p>
+  <div class="tiles" id="tiles"></div>
+
+  <h2>2. Warm median per query and config</h2>
+  <p class="sub">Milliseconds, log scale, 10 runs each. Hover a bar for the restart median and warm minimum.</p>
+  <div class="card">
+    <div class="chart-wrap"><canvas id="chart" role="img" aria-label="Grouped bar chart of warm median time per query and config, log scale"></canvas></div>
+    <details>
+      <summary>Show as table</summary>
+      <div class="scroll"><table id="table"></table></div>
+    </details>
+  </div>
+
+  <h2>3. Query plans</h2>
+  <p class="sub">The plan file saved for each query and config, captured in a separate untimed pass.</p>
+  <div class="card">
+    <div class="controls">
+      <label>Query <select id="plan-query"></select></label>
+      <label>Config <select id="plan-config"></select></label>
+    </div>
+    <div class="disclaimer"><strong>Plan times are not results.</strong> Postgres plans use <code>TIMING OFF</code> and show shape, row counts and buffers only. DuckDB operator timings include profiling overhead. Benchmark times are in the chart above and in <code>results/benchmark.json</code>.</div>
+    <pre id="plan">Select a query and config.</pre>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script type="module">
+  import { CHART_CONFIGS, PLAN_CONFIGS, parseBenchmark, formatRange } from "./data.js";
+
+  const $ = (id) => document.getElementById(id);
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const ms = (v) => (v == null ? "–" : v < 10 ? v.toFixed(1) : v.toFixed(1));
+  const SERIES = { "A": "--series-1", "B": "--series-2", "B-MV": "--series-3", "C-3t": "--series-4", "C-8t": "--series-5" };
+  const SHORT = { "A": "A 3NF", "B": "B star", "B-MV": "B-MV views", "C-3t": "C DuckDB 3t", "C-8t": "C DuckDB 8t", "B-jit": "B star, JIT forced" };
+
+  let data;
+  try {
+    const res = await fetch("../results/benchmark.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status} for results/benchmark.json`);
+    data = parseBenchmark(await res.json());
+  } catch (err) {
+    $("meta").innerHTML = `<span class="error">Could not load results: ${err.message}</span> Run <code>npm run bench</code>, then <code>npm run ui</code>.`;
+    throw err;
+  }
+
+  const m = data.meta;
+  $("meta").textContent = `Run ${m.startedAt ? new Date(m.startedAt).toISOString().slice(0, 16).replace("T", " ") + " UTC" : ""}` +
+    ` · commit ${m.commit ? m.commit.slice(0, 7) : "?"}${m.dirty ? " (dirty)" : ""}` +
+    ` · ${m.factRows ? m.factRows.toLocaleString("en-US") + " trips" : ""} · ${m.runs ?? "?"} runs per query`;
+
+  // 1. Headline tiles.
+  $("tiles").innerHTML = data.headlines.map((h) => `
+    <div class="card tile">
+      <div class="k">${h.title} · ${h.from}→${h.to}</div>
+      <div class="v">${formatRange(h.warmMin, h.warmMax)}</div>
+      <div class="r">restart: ${h.restartMin == null ? "–" : formatRange(h.restartMin, h.restartMax)}</div>
+      <div class="n">${h.note}</div>
+      ${h.id === "preagg" ? '<span class="badge">Bounded by client round trip</span>' : ""}
+    </div>`).join("");
+
+  // 2. Grouped bar chart (log scale) + table view.
+  let chart;
+  function drawChart() {
+    chart?.destroy();
+    const ink2 = css("--ink-2"), muted = css("--muted"), grid = css("--grid"), surface = css("--surface");
+    chart = new Chart($("chart"), {
+      type: "bar",
+      data: {
+        labels: data.queries.map((q) => [q.id, q.title.length > 34 ? q.title.slice(0, 32) + "…" : q.title]),
+        datasets: CHART_CONFIGS.map((c) => ({
+          label: SHORT[c],
+          data: data.queries.map((q) => data.cells[q.id][c].warm),
+          backgroundColor: css(SERIES[c]),
+          borderColor: surface,
+          borderWidth: { left: 1, right: 1 },
+          borderRadius: { topLeft: 4, topRight: 4 },
+          borderSkipped: "bottom",
+          maxBarThickness: 24,
+          categoryPercentage: 0.8,
+          barPercentage: 0.92,
+        })),
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "nearest", intersect: true },
+        scales: {
+          y: {
+            type: "logarithmic",
+            min: 0.5,
+            max: 1000,
+            title: { display: true, text: "ms (log scale)", color: ink2 },
+            grid: { color: grid },
+            border: { color: css("--axis") },
+            ticks: {
+              color: muted,
+              callback: (v) => ([0.5, 1, 10, 100, 1000].includes(v) ? `${v}` : ""),
+            },
+          },
+          x: {
+            grid: { display: false },
+            border: { color: css("--axis") },
+            ticks: {
+              color: ink2,
+              maxRotation: 0,
+              // Narrow screens: query ids only; the titles are in the tooltip and the table.
+              callback: function (v, i) { return this.chart.width < 640 ? data.queries[i].id : this.getLabelForValue(v); },
+            },
+          },
+        },
+        plugins: {
+          legend: { position: "top", align: "start", labels: { color: ink2, boxWidth: 10, boxHeight: 10, useBorderRadius: true, borderRadius: 2 } },
+          tooltip: {
+            callbacks: {
+              title: (items) => data.queries[items[0].dataIndex].id + " " + data.queries[items[0].dataIndex].title,
+              label: (item) => {
+                const c = CHART_CONFIGS[item.datasetIndex];
+                const cell = data.cells[data.queries[item.dataIndex].id][c];
+                return `${SHORT[c]}: ${ms(cell.warm)} ms (restart ${ms(cell.restart)}, min ${ms(cell.min)})`;
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+  drawChart();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawChart);
+
+  $("table").innerHTML =
+    `<thead><tr><th>Query</th>${CHART_CONFIGS.map((c) => `<th><span class="swatch" style="background:var(${SERIES[c]})"></span>${SHORT[c]}</th>`).join("")}</tr></thead>` +
+    `<tbody>${data.queries.map((q) => `<tr><td>${q.id} ${q.title}</td>${CHART_CONFIGS.map((c) => {
+      const cell = data.cells[q.id][c];
+      return `<td>${ms(cell.warm)} <span style="color:var(--muted)">(${ms(cell.restart)} / ${ms(cell.min)})</span></td>`;
+    }).join("")}</tr>`).join("")}</tbody>` +
+    `<caption style="caption-side:bottom;text-align:left;color:var(--muted);padding-top:8px">Warm median (restart median / warm min), ms.</caption>`;
+
+  // 3. Plan viewer.
+  $("plan-query").innerHTML = data.queries.map((q) => `<option value="${q.id}">${q.id} ${q.title}</option>`).join("");
+  $("plan-config").innerHTML = PLAN_CONFIGS.map((c) => `<option value="${c}">${SHORT[c]}${c === "B-jit" ? " (sensitivity)" : ""}</option>`).join("");
+  async function showPlan() {
+    const plan = data.plans.find((p) => p.query === $("plan-query").value && p.config === $("plan-config").value);
+    $("plan").textContent = "Loading…";
+    try {
+      const res = await fetch(`../${plan.path}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      $("plan").textContent = await res.text();
+    } catch (err) {
+      $("plan").textContent = `Could not load ${plan.path}: ${err.message}`;
+    }
+  }
+  $("plan-query").addEventListener("change", showPlan);
+  $("plan-config").addEventListener("change", showPlan);
+  showPlan();
+</script>
+</body>
+</html>

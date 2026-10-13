@@ -13,7 +13,8 @@
     "load": "tsx src/load.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "bench": "tsx src/bench/index.ts"
+    "bench": "tsx src/bench/index.ts",
+    "ui": "tsx src/ui/serve.ts"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^12.2.0",

@@ -58,6 +58,7 @@ npm run ingest:extract        # 1. download Jan–Jun 2025 from the Socrata API 
 npm run db:up                 # 2. start Postgres 16 (docker-compose.yml, pinned settings)
 npm run load                  # 3. build A and B in Postgres, then C in DuckDB
 npm run bench                 # 4. verify results, time every query, save plans
+npm run ui                    # 5. results page at http://localhost:8080/ui/
 ```
 
 The steps must run in this order; `npm run bench` stops with a clear message if the databases
@@ -73,6 +74,20 @@ are not loaded yet.
 `trip_total` in cents, sum of `trip_seconds`). `bench` fails, before timing anything, unless
 every query returns the same result in every config.
 
+### Results page
+
+`npm run ui` serves `ui/` and `results/` from a minimal local static server (`--port N`, default
+8080). The page reads `results/benchmark.json`, so it shows whatever the last `npm run bench`
+wrote. It has three parts:
+
+- the three headline ratios: model, engine, and pre-aggregation (marked as bounded by the client
+  round trip);
+- a log-scale bar chart of warm medians per query and config, with a table view;
+- a viewer for the saved plans.
+
+No build step; Chart.js loads from a CDN. The page can't be opened from `file://`, because
+browsers block `fetch` there.
+
 ### Options
 
 | Command | Flag / env | Default |
@@ -81,6 +96,7 @@ every query returns the same result in every config.
 | `ingest:extract`, `load` | `--end YYYY-MM` / `INGEST_END_MONTH` | `2025-06` |
 | `ingest:extract` | `--concurrency N`, `--page-size N` | 3, 50000 |
 | `load` | `--duckdb-fallback` (load C via Parquet instead of `ATTACH`), `--skip-duckdb` | off |
+| `ui` | `--port N` | 8080 |
 | `bench` | `--runs N`, `--warmup N`, `--restart-runs N`, `--skip-restart`, `--cooldown-ms N`, `--quarter YYYY-QN` | 10, 1, 10, off, 10000, `2025-Q2` |
 
 To benchmark a larger volume, widen the window (e.g. `--start 2024-01 --end 2025-06`) for both
@@ -116,6 +132,8 @@ sql/seed/      community area names (Boundaries – Community Areas, igwz-8jzy)
 src/ingest/    API extract (keyset pagination, manifests) and COPY loader
 src/transform/ Postgres and DuckDB builds
 src/bench/     verification, timing, plans, report
+src/ui/        static server for the results page (npm run ui)
+ui/            results page: index.html + data.js (loader for results/benchmark.json)
 tests/         unit and integration (Testcontainers) tests
 results/       benchmark.json and plans/ from the last run
 CLAUDE.md      project context for Claude Code (loaded automatically at session start)
