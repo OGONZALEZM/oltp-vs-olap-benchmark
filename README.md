@@ -66,7 +66,7 @@ are not loaded yet.
 |---|---|---|---|
 | `ingest:extract` | Keyset-paginated download, 50k rows per page, with per-month manifests. Re-runs skip finished months and resume unfinished ones. | 3,313,460 rows in 69 pages | ~15 min without an app token |
 | `load` | COPY into staging → cleaning (rejects to `staging.rejected_trips`) → OLTP → star → `VACUUM (FREEZE, ANALYZE)` → DuckDB copy. Rebuilds everything from scratch on every run. | 3,304,881 trips in each config, 8,579 rejected | ~6.5 min |
-| `bench` | Builds materialized views, verifies results, 1 warm-up + 10 warm runs and 10 restart (empty buffer pool) runs per query and config, plus a warm-only JIT sensitivity row for B, then captures plans. Configs run round-robin per query, with a 2 s idle pause before every timed run. | `results/benchmark.json`, `results/plans/*.txt` | ~5 min |
+| `bench` | Builds materialized views, verifies results, 1 warm-up + 10 warm runs and 10 restart (empty buffer pool) runs per query and config, plus a warm-only JIT sensitivity row for B, then captures plans. Configs run round-robin per query, with a 10 s idle pause before each (query, config) block. | `results/benchmark.json`, `results/plans/*.txt` | ~5 min |
 
 `load` fails unless A, B and C end up with identical fact checksums (row count, sum of
 `trip_total` in cents, sum of `trip_seconds`). `bench` fails, before timing anything, unless
@@ -80,7 +80,7 @@ every query returns the same result in every config.
 | `ingest:extract`, `load` | `--end YYYY-MM` / `INGEST_END_MONTH` | `2025-06` |
 | `ingest:extract` | `--concurrency N`, `--page-size N` | 3, 50000 |
 | `load` | `--duckdb-fallback` (load C via Parquet instead of `ATTACH`), `--skip-duckdb` | off |
-| `bench` | `--runs N`, `--warmup N`, `--restart-runs N`, `--skip-restart`, `--cooldown-ms N`, `--quarter YYYY-QN` | 10, 1, 10, off, 2000, `2025-Q2` |
+| `bench` | `--runs N`, `--warmup N`, `--restart-runs N`, `--skip-restart`, `--cooldown-ms N`, `--quarter YYYY-QN` | 10, 1, 10, off, 10000, `2025-Q2` |
 
 To benchmark a larger volume, widen the window (e.g. `--start 2024-01 --end 2025-06`) for both
 `ingest:extract` and `load`; `--quarter` must fall inside the window.

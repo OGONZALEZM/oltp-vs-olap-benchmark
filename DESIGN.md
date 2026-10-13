@@ -82,13 +82,18 @@ recorded in `results/benchmark.json`, together with versions, row counts, the ho
   `results/benchmark.json`), so no config always runs last. Each (query, config) is one block,
   pre-warmed immediately before it. Runs of different configs are not interleaved, because A and
   B do not fit in `shared_buffers` together and interleaving would evict the pre-warmed tables.
-  A 2 s idle pause (`--cooldown-ms`) precedes every timed run, warm and restart.
-  *Why (thermal note):* the host is a fanless MacBook Air. In the run before this change, configs
-  ran one after another with back-to-back timed runs, and Postgres warm medians came out *higher*
-  than restart medians in 6 of 8 A/B cells: the restart runs, which had idle time between them,
-  were tight, while the warm samples drifted (q2 B warm 340–558 ms, restart 345–379 ms). Sustained
-  load appears to throttle the machine, so without pauses the timings depend on the order of the
-  runs more than on the cache.
+  A 10 s idle pause (`--cooldown-ms`) precedes each warm block; then the untimed warm-up run
+  (which also wakes the CPU) and 10 back-to-back timed runs. Restart runs get no extra pause: the
+  restart itself is idle time.
+  *Why (thermal note):* the host is a fanless MacBook Air. With configs run one after another and
+  no pauses, Postgres warm medians came out *higher* than restart medians in 6 of 8 A/B cells:
+  the restart runs, which had idle time between them, were tight, while the warm samples drifted
+  (q2 B warm 340–558 ms, restart 345–379 ms). Sustained load appears to throttle the machine.
+  A 2 s pause before *every* timed run fixed that but added the CPU's wake-up cost to each sample:
+  the same query timed back to back vs after a 2 s pause took 18.0 vs 25.4 ms in DuckDB and
+  0.5 vs 2.4 ms on B-MV, a fixed 2–7 ms that matters only for short queries. Pausing per block
+  keeps the cool-down without that cost (check: DuckDB q1 17.7–18.4 ms, Postgres B q1 median
+  1–4% above its minimum).
 - **Restart (empty buffer pool):** before every timed restart run the Postgres container is
   restarted (emptying `shared_buffers` and backend caches) and a new connection opened; DuckDB
   gets a fresh read-only instance (empty buffer pool). **This is not a cold cache:** Docker runs inside the OrbStack

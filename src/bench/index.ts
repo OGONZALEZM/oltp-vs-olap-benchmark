@@ -1,17 +1,16 @@
 /**
- * npm run bench [-- --runs 10 --warmup 1 --restart-runs 10 --cooldown-ms 2000 --quarter 2025-Q2 --skip-restart]
+ * npm run bench [-- --runs 10 --warmup 1 --restart-runs 10 --cooldown-ms 10000 --quarter 2025-Q2 --skip-restart]
  *
  * Phases (each config runs alone; nothing else queries the engines meanwhile):
  *   1. Build materialized views for B-MV (build time reported).
  *   2. Verify: every query returns the same result in every config (main and sensitivity), or
  *      the benchmark fails.
  *   3. Warm: per query, configs in round-robin order (rotated by one per query); per (query,
- *      config) block, `warmup` untimed runs then `runs` timed runs. Sensitivity configs (B-jit)
- *      are timed warm only and reported in their own section.
+ *      config) block, a `cooldown-ms` idle pause, then `warmup` untimed runs (which also wake
+ *      the CPU), then `runs` back-to-back timed runs. Sensitivity configs (B-jit) are timed warm
+ *      only and reported in their own section.
  *   4. Restart (empty buffer pool): same order; Postgres container restarted before every timed
- *      run; DuckDB opened fresh. Main configs only.
- *   Every timed run (warm and restart) is preceded by a `cooldown-ms` idle pause, so a fanless
- *   host does not heat up over a block and penalize whichever config runs late in it.
+ *      run; DuckDB opened fresh. Main configs only. No extra pause: the restart is idle time.
  *   5. Plans: EXPLAIN (ANALYZE, BUFFERS) / EXPLAIN ANALYZE in a separate, untimed pass.
  * Output: results/benchmark.json, results/plans/*.txt and a console summary.
  */
@@ -47,7 +46,7 @@ async function main(): Promise<void> {
       runs: { type: "string", default: "10" },
       warmup: { type: "string", default: "1" },
       "restart-runs": { type: "string", default: "10" },
-      "cooldown-ms": { type: "string", default: "2000" },
+      "cooldown-ms": { type: "string", default: "10000" },
       quarter: { type: "string", default: "2025-Q2" },
       "skip-restart": { type: "boolean", default: false },
     },
@@ -162,12 +161,12 @@ async function main(): Promise<void> {
       const s = await openSession(c);
       try {
         const sql = sqlText.get(key(c.id, q.id))!;
+        // Idle pause before the block (thermal), then the untimed warm-up wakes the CPU: a pause
+        // before every timed run would add a fixed wake-up cost (2-7 ms) to each sample.
+        await cooldown();
         for (let i = 0; i < warmup; i++) await s.time(sql);
         const samples: number[] = [];
-        for (let i = 0; i < runs; i++) {
-          await cooldown();
-          samples.push((await s.time(sql)).ms);
-        }
+        for (let i = 0; i < runs; i++) samples.push((await s.time(sql)).ms);
         warm.set(key(c.id, q.id), summarize(samples));
         log(`warm ${c.id.padEnd(5)} ${q.id}: median ${warm.get(key(c.id, q.id))!.medianMs.toFixed(1)} ms`);
       } finally {
@@ -189,7 +188,6 @@ async function main(): Promise<void> {
           if (c.engine === "postgres") await restartPostgres(PG_CONTAINER, databaseUrl());
           const s = await openSession(c);
           try {
-            await cooldown();
             samples.push((await s.time(sql)).ms);
           } finally {
             await s.close();
@@ -286,7 +284,7 @@ async function main(): Promise<void> {
       parameters: { runs, warmup, restartRuns, cooldownMs, quarter: values.quarter },
       method: {
         timing: "Wall clock around one query call, after the connection is open: send, execute, receive the (small) result and turn it into JS row objects (same scope for both engines). Postgres timings include a loopback round trip into the Docker VM; DuckDB is in-process.",
-        ordering: `Query by query; within a query, configs run in round-robin order (rotated by one config per query; see \`order\`), each as one block of warm-up plus timed runs. Runs of different configs are not interleaved: A and B do not fit in shared_buffers together, so interleaving would evict the pre-warmed tables. A ${cooldownMs} ms idle pause precedes every timed run (warm and restart): without it, on the fanless host, back-to-back runs appear to heat the machine (in an earlier run, Postgres warm medians exceeded restart medians in 6 of 8 A/B cells) and inflate the medians of whichever config runs late.`,
+        ordering: `Query by query; within a query, configs run in round-robin order (rotated by one config per query; see \`order\`), each as one block of warm-up plus timed runs. Runs of different configs are not interleaved: A and B do not fit in shared_buffers together, so interleaving would evict the pre-warmed tables. A ${cooldownMs} ms idle pause precedes each warm block, followed by the untimed warm-up run (which also wakes the CPU) and back-to-back timed runs. Why: with no pauses (configs one after another), Postgres warm medians exceeded restart medians in 6 of 8 A/B cells on the fanless host (thermal drift); with a 2 s pause before every timed run, the CPU's wake-up cost (2-7 ms) inflated short queries (DuckDB q1 18 -> 25 ms, B-MV q1 0.5 -> 2.4 ms). Restart runs get no extra pause: the restart itself is idle time.`,
         statistics: "min, median and nearest-rank p95 of the timed runs (with 10 runs, p95 is the slowest run)",
         warm: `${warmup} untimed warm-up run(s), then ${runs} timed runs on the same connection. Immediately before each Postgres config's warm runs, its tables and secondary indexes are loaded into shared_buffers with pg_prewarm, one relation at a time (primary-key indexes excluded: unused and too large to fit alongside). This is the best case for Postgres's buffer cache; native vs VM is not controlled, and JIT is bounded by a sensitivity row (B-jit).`,
         restart: "Restart (empty buffer pool): the Postgres container is restarted before every timed run (empties shared_buffers and backend caches) and a new connection is opened; DuckDB gets a fresh read-only instance (empty buffer pool). The OrbStack VM's OS page cache survives container restarts and the DuckDB file stays in the host page cache, so this is not a cold cache: it measures an empty database buffer pool, not disk reads.",
