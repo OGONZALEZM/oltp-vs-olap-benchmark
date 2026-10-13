@@ -31,7 +31,8 @@ sensitivity row, plans and metadata) are in `results/benchmark.json`.
 - **Materialized views (B-MV) remove the query work entirely.** Their times are within about 1 ms of the client round-trip floor, and they are reported as their own row.
 
 
-Methodology, data cleaning and the reasoning behind these numbers: [DESIGN.md](DESIGN.md).
+Design decisions and the reasoning behind these numbers: [DESIGN.md](DESIGN.md). Measurement
+method, noise, caveats and per-query plans: [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
 ## Prerequisites
 
@@ -118,6 +119,8 @@ src/bench/     verification, timing, plans, report
 tests/         unit and integration (Testcontainers) tests
 results/       benchmark.json and plans/ from the last run
 CLAUDE.md      project context for Claude Code (loaded automatically at session start)
+docs/BENCHMARK.md  measurement method, noise, caveats, per-query plans, data notes
 docs/ai-log.md log of AI-generated work that was corrected, and how it was caught
+docs/reviews/  raw output of each benchmark-reviewer run
 .claude/agents/benchmark-reviewer.md  read-only reviewer subagent for benchmark fairness
 ```
